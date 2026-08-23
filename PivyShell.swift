@@ -4,6 +4,100 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum CyberpunkTheme {
+    static let background = Color(red: 0.018, green: 0.024, blue: 0.055)
+    static let surface = Color(red: 0.045, green: 0.055, blue: 0.105)
+    static let surfaceRaised = Color(red: 0.070, green: 0.075, blue: 0.145)
+    static let surfaceBright = Color(red: 0.100, green: 0.095, blue: 0.185)
+    static let cyan = Color(red: 0.120, green: 0.900, blue: 1.000)
+    static let violet = Color(red: 0.470, green: 0.300, blue: 1.000)
+    static let magenta = Color(red: 1.000, green: 0.180, blue: 0.660)
+    static let orange = Color(red: 1.000, green: 0.540, blue: 0.180)
+    static let green = Color(red: 0.260, green: 1.000, blue: 0.580)
+    static let text = Color(red: 0.910, green: 0.940, blue: 1.000)
+    static let muted = Color(red: 0.570, green: 0.620, blue: 0.760)
+    static let border = Color(red: 0.180, green: 0.230, blue: 0.430)
+}
+
+private struct CyberpunkGroupBoxStyle: GroupBoxStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            configuration.label
+                .font(.callout.weight(.bold))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [CyberpunkTheme.text, CyberpunkTheme.cyan],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+            configuration.content
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LinearGradient(
+                colors: [CyberpunkTheme.surfaceRaised, CyberpunkTheme.surface],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(CyberpunkTheme.border.opacity(0.80), lineWidth: 1)
+        )
+        .overlay(alignment: .topLeading) {
+            Rectangle()
+                .fill(CyberpunkTheme.cyan)
+                .frame(width: 36, height: 2)
+                .padding(.top, -1)
+                .padding(.leading, 14)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: CyberpunkTheme.violet.opacity(0.10), radius: 12, y: 4)
+    }
+}
+
+private struct CyberpunkBackdrop: View {
+    var body: some View {
+        ZStack {
+            CyberpunkTheme.background
+            LinearGradient(
+                colors: [CyberpunkTheme.violet.opacity(0.16), .clear, CyberpunkTheme.magenta.opacity(0.08)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            RadialGradient(
+                colors: [CyberpunkTheme.cyan.opacity(0.13), .clear],
+                center: .topTrailing,
+                startRadius: 20,
+                endRadius: 560
+            )
+            Canvas { context, size in
+                let spacing: CGFloat = 34
+                var grid = Path()
+                for x in stride(from: 0, through: size.width, by: spacing) {
+                    grid.move(to: CGPoint(x: x, y: 0))
+                    grid.addLine(to: CGPoint(x: x, y: size.height))
+                }
+                for y in stride(from: 0, through: size.height, by: spacing) {
+                    grid.move(to: CGPoint(x: 0, y: y))
+                    grid.addLine(to: CGPoint(x: size.width, y: y))
+                }
+                context.stroke(grid, with: .color(CyberpunkTheme.cyan.opacity(0.045)), lineWidth: 0.5)
+
+                var scanline = Path()
+                scanline.move(to: CGPoint(x: 0, y: size.height * 0.18))
+                scanline.addLine(to: CGPoint(x: size.width, y: size.height * 0.18))
+                scanline.move(to: CGPoint(x: 0, y: size.height * 0.82))
+                scanline.addLine(to: CGPoint(x: size.width, y: size.height * 0.82))
+                context.stroke(scanline, with: .color(CyberpunkTheme.magenta.opacity(0.10)), lineWidth: 1)
+            }
+        }
+        .ignoresSafeArea()
+    }
+}
+
 private struct CommandResult {
     let status: Int32
     let stdout: Data
@@ -36,11 +130,11 @@ enum StatusKind {
 
     var color: Color {
         switch self {
-        case .info: return .secondary
-        case .running: return .blue
-        case .success: return .green
-        case .warning: return .orange
-        case .failure: return .red
+        case .info: return CyberpunkTheme.muted
+        case .running: return CyberpunkTheme.cyan
+        case .success: return CyberpunkTheme.green
+        case .warning: return CyberpunkTheme.orange
+        case .failure: return CyberpunkTheme.magenta
         }
     }
 
@@ -2144,17 +2238,18 @@ private struct SidebarNavigation: View {
                 HStack(spacing: 9) {
                     Image(systemName: "key.fill")
                         .font(.title3)
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(CyberpunkTheme.cyan)
                     VStack(alignment: .leading, spacing: 1) {
                         Text("YubiKey")
                             .font(.headline)
                         Text(model.pivyInstalled ? "PIV 已就绪" : "找不到 pivy")
                             .font(.caption)
-                            .foregroundStyle(model.pivyInstalled ? .green : .red)
+                            .foregroundStyle(model.pivyInstalled ? CyberpunkTheme.green : CyberpunkTheme.magenta)
                     }
                 }
                 Text(model.deviceReader)
                     .font(.caption)
+                    .foregroundStyle(CyberpunkTheme.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 HStack {
@@ -2172,16 +2267,23 @@ private struct SidebarNavigation: View {
             }
             .padding(11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.accentColor.opacity(0.12))
+            .background(
+                LinearGradient(
+                    colors: [CyberpunkTheme.violet.opacity(0.30), CyberpunkTheme.cyan.opacity(0.10)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.accentColor.opacity(0.25), lineWidth: 1)
+                    .stroke(CyberpunkTheme.cyan.opacity(0.58), lineWidth: 1)
             )
+            .shadow(color: CyberpunkTheme.cyan.opacity(0.16), radius: 14)
             .clipShape(RoundedRectangle(cornerRadius: 12))
 
             Text("功能")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(CyberpunkTheme.cyan)
                 .padding(.horizontal, 8)
 
             VStack(spacing: 3) {
@@ -2207,12 +2309,18 @@ private struct SidebarNavigation: View {
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
                 .contentShape(Rectangle())
-                .foregroundStyle(selection == tab ? Color.accentColor : Color.primary)
+                .foregroundStyle(selection == tab ? CyberpunkTheme.cyan : CyberpunkTheme.text)
                 .background(
                     selection == tab
-                        ? Color.accentColor.opacity(0.16)
-                        : hoveredTab == tab ? Color.primary.opacity(0.06) : Color.clear
+                        ? CyberpunkTheme.cyan.opacity(0.16)
+                        : hoveredTab == tab ? CyberpunkTheme.violet.opacity(0.14) : Color.clear
                 )
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(selection == tab ? CyberpunkTheme.magenta : .clear)
+                        .frame(width: 3)
+                        .padding(.vertical, 5)
+                }
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .onHover { isHovering in
                     hoveredTab = isHovering ? tab : nil
@@ -2233,16 +2341,17 @@ private struct SidebarNavigation: View {
                 Divider()
                 Label("pivy-tool", systemImage: "terminal")
                     .font(.caption)
+                    .foregroundStyle(CyberpunkTheme.cyan)
                 Text(model.pivyToolPath)
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(CyberpunkTheme.muted)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
         }
         .padding(12)
         .frame(minWidth: 196, maxWidth: 196, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.secondary.opacity(0.06))
+        .background(CyberpunkTheme.surface.opacity(0.94))
     }
 }
 
@@ -2254,10 +2363,17 @@ private struct PageHeader: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(tab.title)
-                    .font(.title2.weight(.semibold))
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [CyberpunkTheme.text, CyberpunkTheme.cyan],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
                 Text(tab.subtitle)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(CyberpunkTheme.muted)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -2274,7 +2390,11 @@ private struct PageHeader: View {
             }
             .padding(.horizontal, 10)
             .frame(minHeight: 28)
-            .background(model.statusKind.background)
+            .background(model.statusKind.background.overlay(CyberpunkTheme.surfaceRaised))
+            .overlay(
+                Capsule()
+                    .stroke(model.statusKind.color.opacity(0.45), lineWidth: 1)
+            )
             .clipShape(Capsule())
         }
         .frame(maxWidth: .infinity, minHeight: 50, maxHeight: 50, alignment: .topLeading)
@@ -2321,12 +2441,12 @@ private struct DropPanel: View {
         VStack(spacing: 7) {
             Image(systemName: "arrow.down.doc")
                 .font(.title3)
-                .foregroundStyle(isTargeted ? Color.accentColor : .secondary)
+                .foregroundStyle(isTargeted ? CyberpunkTheme.cyan : CyberpunkTheme.muted)
             Text(title)
                 .font(.subheadline.weight(.semibold))
             Text(url?.path ?? prompt)
                 .font(.callout)
-                .foregroundStyle(url == nil ? .secondary : .primary)
+                .foregroundStyle(url == nil ? CyberpunkTheme.muted : CyberpunkTheme.text)
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .multilineTextAlignment(.center)
@@ -2334,11 +2454,12 @@ private struct DropPanel: View {
         }
         .frame(maxWidth: .infinity, minHeight: 112)
         .padding(8)
-        .background(isTargeted ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.06))
+        .background(isTargeted ? CyberpunkTheme.cyan.opacity(0.15) : CyberpunkTheme.surfaceRaised.opacity(0.72))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(isTargeted ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: 1)
+                .stroke(isTargeted ? CyberpunkTheme.cyan : CyberpunkTheme.border, lineWidth: isTargeted ? 1.5 : 1)
         )
+        .shadow(color: isTargeted ? CyberpunkTheme.cyan.opacity(0.24) : .clear, radius: 10)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isTargeted) { providers in
             guard let provider = providers.first else { return false }
@@ -2378,25 +2499,25 @@ private struct BatchDropPanel: View {
         HStack(spacing: 12) {
             Image(systemName: "rectangle.stack.badge.plus")
                 .font(.title2)
-                .foregroundStyle(isTargeted ? Color.accentColor : .secondary)
+                .foregroundStyle(isTargeted ? CyberpunkTheme.cyan : CyberpunkTheme.muted)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.headline)
                 Text(prompt)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(CyberpunkTheme.muted)
             }
             Spacer()
             Text("按后缀自动归类")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(CyberpunkTheme.cyan)
         }
         .padding(8)
         .frame(maxWidth: .infinity, minHeight: 44)
-        .background(isTargeted ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.06))
+        .background(isTargeted ? CyberpunkTheme.cyan.opacity(0.15) : CyberpunkTheme.surfaceRaised.opacity(0.72))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(isTargeted ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: 1)
+                .stroke(isTargeted ? CyberpunkTheme.cyan : CyberpunkTheme.border, lineWidth: isTargeted ? 1.5 : 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isTargeted) { providers in
@@ -2446,38 +2567,48 @@ struct ContentView: View {
     @State private var isLogExpanded = true
 
     var body: some View {
-        HStack(spacing: 0) {
-            SidebarNavigation(selection: $selectedTab, model: model)
+        ZStack {
+            CyberpunkBackdrop()
 
-            Divider()
+            HStack(spacing: 0) {
+                SidebarNavigation(selection: $selectedTab, model: model)
 
-            VStack(alignment: .leading, spacing: 12) {
-                PageHeader(tab: selectedTab, model: model)
+                Rectangle()
+                    .fill(CyberpunkTheme.cyan.opacity(0.22))
+                    .frame(width: 1)
 
-                if selectedTab == .logs {
-                    logPage
-                } else {
-                    ZStack(alignment: .bottom) {
-                        GroupBox {
-                            tabContent
+                VStack(alignment: .leading, spacing: 12) {
+                    PageHeader(tab: selectedTab, model: model)
+
+                    if selectedTab == .logs {
+                        logPage
+                    } else {
+                        ZStack(alignment: .bottom) {
+                            GroupBox {
+                                tabContent
+                            }
+                            .id(selectedTab)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+                            if isLogExpanded {
+                                expandedLogDrawer
+                            } else {
+                                collapsedLogBar
+                            }
                         }
-                        .id(selectedTab)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-                        if isLogExpanded {
-                            expandedLogDrawer
-                        } else {
-                            collapsedLogBar
-                        }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
+                .padding(.top, 18)
+                .padding(.horizontal, 18)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .padding(.top, 18)
-            .padding(.horizontal, 18)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(minWidth: 1040, minHeight: 760)
+        .foregroundStyle(CyberpunkTheme.text)
+        .tint(CyberpunkTheme.cyan)
+        .preferredColorScheme(.dark)
+        .groupBoxStyle(CyberpunkGroupBoxStyle())
         .sheet(isPresented: $model.showPINPrompt) {
             PINPromptView(model: model)
         }
@@ -2500,12 +2631,15 @@ struct ContentView: View {
 
             Text("这里集中显示所有页面产生的状态、命令和输出路径；功能页面本身不会再被日志挤压。")
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(CyberpunkTheme.muted)
 
             TextEditor(text: $model.log)
                 .font(.system(size: 12, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .foregroundStyle(CyberpunkTheme.green)
+                .background(CyberpunkTheme.surface)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .border(Color.secondary.opacity(0.25))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(CyberpunkTheme.border, lineWidth: 1))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -2535,10 +2669,10 @@ struct ContentView: View {
         }
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34)
-        .background(.regularMaterial)
+        .background(CyberpunkTheme.surfaceRaised.opacity(0.96))
         .overlay(
             RoundedRectangle(cornerRadius: 9)
-                .stroke(Color.secondary.opacity(0.24), lineWidth: 1)
+                .stroke(CyberpunkTheme.cyan.opacity(0.36), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 9))
         .padding(.horizontal, 10)
@@ -2568,17 +2702,23 @@ struct ContentView: View {
             TextEditor(text: $model.log)
                 .font(.system(size: 11, design: .monospaced))
                 .frame(maxWidth: .infinity, minHeight: 180, maxHeight: 180)
-                .border(Color.secondary.opacity(0.25))
+                .scrollContentBackground(.hidden)
+                .foregroundStyle(CyberpunkTheme.green)
+                .background(CyberpunkTheme.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(CyberpunkTheme.border.opacity(0.86), lineWidth: 1)
+                )
         }
         .padding(10)
         .frame(maxWidth: .infinity, minHeight: 230, maxHeight: 230)
-        .background(.regularMaterial)
+        .background(CyberpunkTheme.surfaceRaised.opacity(0.98))
         .overlay(
             RoundedRectangle(cornerRadius: 11)
-                .stroke(Color.secondary.opacity(0.28), lineWidth: 1)
+                .stroke(CyberpunkTheme.violet.opacity(0.52), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 11))
-        .shadow(color: .black.opacity(0.20), radius: 12, y: -3)
+        .shadow(color: CyberpunkTheme.violet.opacity(0.30), radius: 16, y: -3)
         .padding(.horizontal, 10)
         .padding(.top, 10)
     }
@@ -2655,14 +2795,18 @@ struct ContentView: View {
                                     .buttonStyle(.borderedProminent)
                                 Text("缺少：\(model.missingInstallationNames.joined(separator: "、"))")
                                     .font(.caption)
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(CyberpunkTheme.orange)
                             }
                             Text(model.installationInstructions)
                                 .font(.system(.caption, design: .monospaced))
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(8)
-                                .background(Color.secondary.opacity(0.08))
+                                .background(CyberpunkTheme.surface)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(CyberpunkTheme.orange.opacity(0.32), lineWidth: 1)
+                                )
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
                             Text("只显示当前未检测到的组件；安装后重新打开本工具即可刷新状态。")
                                 .font(.caption)
@@ -2791,7 +2935,7 @@ struct ContentView: View {
     private func guideFeatureRow(title: String, detail: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "arrow.right.circle.fill")
-                .foregroundStyle(.tint)
+                .foregroundStyle(CyberpunkTheme.cyan)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.callout.weight(.semibold))
                 Text(detail)
@@ -2983,14 +3127,21 @@ struct ContentView: View {
                     .buttonStyle(.plain)
                     .frame(maxWidth: .infinity, minHeight: 32)
                     .contentShape(Rectangle())
-                    .foregroundStyle(selectedGPGSection == section ? Color.accentColor : Color.primary)
+                    .foregroundStyle(selectedGPGSection == section ? CyberpunkTheme.cyan : CyberpunkTheme.text)
                     .background(
                         selectedGPGSection == section
-                            ? Color.accentColor.opacity(0.15)
+                            ? CyberpunkTheme.cyan.opacity(0.15)
                             : hoveredGPGSection == section
-                                ? Color.primary.opacity(0.08)
-                                : Color.clear
+                                ? CyberpunkTheme.violet.opacity(0.14)
+                                : CyberpunkTheme.surface.opacity(0.40)
                     )
+                    .overlay(alignment: .bottom) {
+                        Capsule()
+                            .fill(selectedGPGSection == section ? CyberpunkTheme.magenta : .clear)
+                            .frame(height: 2)
+                            .padding(.horizontal, 12)
+                            .padding(.bottom, 2)
+                    }
                     .clipShape(RoundedRectangle(cornerRadius: 7))
                     .onHover { isHovering in
                         hoveredGPGSection = isHovering ? section : nil
@@ -3004,7 +3155,11 @@ struct ContentView: View {
                 }
             }
             .padding(4)
-            .background(Color.secondary.opacity(0.08))
+            .background(CyberpunkTheme.surfaceRaised.opacity(0.92))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9)
+                    .stroke(CyberpunkTheme.border.opacity(0.75), lineWidth: 1)
+            )
             .clipShape(RoundedRectangle(cornerRadius: 9))
 
             Divider()
@@ -3164,7 +3319,11 @@ struct ContentView: View {
                         .lineLimit(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(8)
-                        .background(Color.secondary.opacity(0.08))
+                        .background(CyberpunkTheme.surface)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(CyberpunkTheme.border.opacity(0.72), lineWidth: 1)
+                        )
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                     Text("推荐：直接在 YubiKey 上生成；已有电脑密钥时，再通过 gpg --edit-key → keytocard 迁移子密钥。只导入公钥不能恢复私钥，也不能制作备用卡。")
                         .font(.caption)
@@ -3189,7 +3348,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 5) {
                         Label("快速步骤", systemImage: "list.number")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(CyberpunkTheme.orange)
                         Text("读取卡片 → 在 Terminal 输入 admin → generate → 回到这里读取公钥")
                             .font(.caption)
                         Text("PIN 只在 GnuPG 的安全弹窗中输入，本工具不会记录 PIN。")
@@ -3198,10 +3357,10 @@ struct ContentView: View {
                     }
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.orange.opacity(0.10))
+                    .background(CyberpunkTheme.orange.opacity(0.10))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.orange.opacity(0.32), lineWidth: 1)
+                            .stroke(CyberpunkTheme.orange.opacity(0.32), lineWidth: 1)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     VStack(alignment: .leading, spacing: 0) {
