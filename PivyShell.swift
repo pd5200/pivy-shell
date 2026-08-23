@@ -204,12 +204,12 @@ final class PivyModel: ObservableObject {
     @Published var pin = ""
     @Published var showPINPrompt = false
     @Published var pinPromptTitle = "输入 PIV PIN"
-    @Published var log = "准备就绪。请插入 YubiKey，然后点击“读取设备”。\n"
+    @Published var log = "准备就绪。插入或更换 YubiKey 后会自动读取设备。\n"
     @Published var statusText = "准备就绪"
     @Published var statusKind: StatusKind = .info
     @Published var busy = false
     @Published var deviceSummary = "尚未读取设备"
-    @Published var deviceReader = "Yubico YubiKey"
+    @Published var deviceReader = "等待 YubiKey"
     @Published var deviceSerial = "--"
     @Published var devicePIVVersion = "--"
     @Published var selectedSlot = "9a"
@@ -219,6 +219,17 @@ final class PivyModel: ObservableObject {
     let pivyToolPath = "/opt/pivy/bin/pivy-tool"
     let pendingPINHint = "PIN 只用于本次操作，完成后会立即清空。"
     private var pendingOperation: PendingOperation?
+    private var deviceMonitorTimer: Timer?
+    private var autoDeviceProbeInFlight = false
+    private var lastDetectedDeviceIdentity: String?
+
+    init() {
+        startDeviceMonitor()
+    }
+
+    deinit {
+        deviceMonitorTimer?.invalidate()
+    }
 
     var pivyInstalled: Bool {
         FileManager.default.isExecutableFile(atPath: pivyToolPath)
@@ -418,6 +429,71 @@ final class PivyModel: ObservableObject {
         showDevice(attempt: 0)
     }
 
+    private func startDeviceMonitor() {
+        let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.pollDeviceForAutomaticRefresh()
+            }
+        }
+        timer.tolerance = 0.5
+        RunLoop.main.add(timer, forMode: .common)
+        deviceMonitorTimer = timer
+        pollDeviceForAutomaticRefresh()
+    }
+
+    private func pollDeviceForAutomaticRefresh() {
+        guard pivyInstalled, !busy, !autoDeviceProbeInFlight else { return }
+
+        autoDeviceProbeInFlight = true
+        let tool = pivyToolPath
+        DispatchQueue.global(qos: .utility).async {
+            let result = Self.execute(tool: tool, arguments: ["-j", "list"], input: nil)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.autoDeviceProbeInFlight = false
+                self.handleAutomaticDeviceProbe(result)
+            }
+        }
+    }
+
+    private func handleAutomaticDeviceProbe(_ result: CommandResult) {
+        let output = Self.text(result.stdout)
+        let error = Self.text(result.stderr)
+
+        guard result.status == 0, let summary = Self.formatDeviceSummary(result.stdout) else {
+            guard lastDetectedDeviceIdentity != nil,
+                  Self.looksLikeNoDevice(output: output, error: error) else { return }
+
+            lastDetectedDeviceIdentity = nil
+            deviceSummary = "未检测到 YubiKey"
+            deviceReader = "未检测到 YubiKey"
+            deviceSerial = "--"
+            devicePIVVersion = "--"
+            availableSlots = ["9a", "9c", "9d", "9e"]
+            announce("YubiKey 已移除", kind: .warning)
+            appendLog("自动检测：未检测到 PIV YubiKey。插入设备后将自动重新读取。")
+            return
+        }
+
+        let identity = Self.deviceIdentity(from: summary)
+        guard identity != lastDetectedDeviceIdentity else { return }
+
+        let wasConnected = lastDetectedDeviceIdentity != nil
+        applyDeviceSummary(summary, identity: identity)
+        let message = wasConnected ? "已自动识别新的 YubiKey" : "已自动读取 YubiKey"
+        lastDetectedDeviceIdentity = identity
+        announce(message, kind: .success)
+        appendLog("自动读取设备信息：\n\(summary)")
+    }
+
+    private func applyDeviceSummary(_ summary: String, identity: String? = nil) {
+        deviceSummary = summary
+        deviceReader = Self.summaryValue(summary, prefix: "阅读器：") ?? "Yubico YubiKey"
+        deviceSerial = Self.summaryValue(summary, prefix: "序列号：") ?? "--"
+        devicePIVVersion = Self.summaryValue(summary, prefix: "PIV 版本：") ?? "--"
+        lastDetectedDeviceIdentity = identity ?? Self.deviceIdentity(from: summary)
+    }
+
     private func showDevice(attempt: Int) {
         runTool(arguments: ["-j", "list"], input: nil, operation: "读取设备") { [weak self] result in
             guard let self else { return }
@@ -445,10 +521,7 @@ final class PivyModel: ObservableObject {
                 return
             }
 
-            deviceSummary = summary
-            deviceReader = Self.summaryValue(summary, prefix: "阅读器：") ?? "Yubico YubiKey"
-            deviceSerial = Self.summaryValue(summary, prefix: "序列号：") ?? "--"
-            devicePIVVersion = Self.summaryValue(summary, prefix: "PIV 版本：") ?? "--"
+            applyDeviceSummary(summary)
             let slots = Self.extractSlotIDs(result.stdout)
             if !slots.isEmpty {
                 availableSlots = slots
@@ -535,6 +608,19 @@ final class PivyModel: ObservableObject {
         }
         return ["no such device", "no piv cards", "tokens found", "sharing", "reader", "pc/sc", "pcsc", "smart card", "card error", "end of file"]
             .contains(where: text.contains)
+    }
+
+    private static func looksLikeNoDevice(output: String, error: String) -> Bool {
+        let text = "\(output)\n\(error)".lowercased()
+        return [
+            "no such device",
+            "no piv cards",
+            "no piv card",
+            "no cards",
+            "no tokens found",
+            "no piv/tokens",
+            "not found"
+        ].contains(where: text.contains)
     }
 
     func showVersion() {
@@ -2009,6 +2095,13 @@ final class PivyModel: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    nonisolated private static func deviceIdentity(from summary: String) -> String {
+        let reader = summaryValue(summary, prefix: "阅读器：") ?? ""
+        let serial = summaryValue(summary, prefix: "序列号：") ?? ""
+        let pivVersion = summaryValue(summary, prefix: "PIV 版本：") ?? ""
+        return "\(reader)|\(serial)|\(pivVersion)"
+    }
+
     nonisolated private static func extractSlotIDs(_ data: Data) -> [String] {
         guard let object = try? JSONSerialization.jsonObject(with: data) else { return [] }
         if let dictionary = object as? [String: Any], let slots = dictionary["slots"] as? [String: Any] {
@@ -2242,9 +2335,17 @@ private struct SidebarNavigation: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text("YubiKey")
                             .font(.headline)
-                        Text(model.pivyInstalled ? "PIV 已就绪" : "找不到 pivy")
+                        Text(
+                            model.pivyInstalled
+                                ? (model.deviceSerial == "--" ? "等待设备 · 自动监测" : "PIV 已连接 · 自动监测")
+                                : "找不到 pivy"
+                        )
                             .font(.caption)
-                            .foregroundStyle(model.pivyInstalled ? CyberpunkTheme.green : CyberpunkTheme.magenta)
+                            .foregroundStyle(
+                                model.pivyInstalled
+                                    ? (model.deviceSerial == "--" ? CyberpunkTheme.cyan : CyberpunkTheme.green)
+                                    : CyberpunkTheme.magenta
+                            )
                     }
                 }
                 Text(model.deviceReader)
