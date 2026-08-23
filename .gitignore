@@ -1,0 +1,12 @@
+.DS_Store
+PivyShell.app/
+AppIcon.iconset/
+AppIcon.icns
+.build/
+DerivedData/
+*.log
+*.pivybox
+*.sig
+*.sig.cert.pem
+*.csr.pem
+*.command
