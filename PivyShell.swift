@@ -100,7 +100,11 @@ final class PivyModel: ObservableObject {
     @Published var gpgVerifyFile: URL?
     @Published var gpgVerifySignatureFile: URL?
     @Published var gpgRecipient = ""
+    @Published var gpgEncryptRecipient = ""
     @Published var gpgKeys: [GPGKey] = []
+    @Published var gpgSecretKeys: [GPGKey] = []
+    @Published var gpgKeyDetails = "尚未读取主密钥和子密钥结构"
+    @Published var gpgEncryptToSelf = true
     @Published var gpgCardSummary = "尚未读取 OpenPGP 卡"
     @Published var gpgKeyserver = "hkps://keys.openpgp.org"
     @Published var pin = ""
@@ -631,15 +635,51 @@ final class PivyModel: ObservableObject {
 
             let keys = Self.parseGPGKeys(result.stdout)
             gpgKeys = keys
-            if let first = gpgKeys.first, gpgRecipient.isEmpty {
-                gpgRecipient = first.fingerprint
+
+            self.runGPG(
+                arguments: ["--batch", "--with-colons", "--list-secret-keys"],
+                operation: "读取 GPG 私钥索引"
+            ) { [weak self] secretResult in
+                guard let self else { return }
+                let secretKeys = secretResult.status == 0 ? Self.parseGPGKeys(secretResult.stdout) : []
+                self.gpgSecretKeys = secretKeys
+                if self.gpgRecipient.isEmpty, let first = secretKeys.first {
+                    self.gpgRecipient = first.fingerprint
+                }
+
+                if keys.isEmpty {
+                    self.announce("没有发现 GPG 公钥", kind: .warning)
+                    self.appendLog("请先导入收件人的 OpenPGP 公钥，或手动输入邮箱/指纹。")
+                } else {
+                    self.announce("已读取 \(keys.count) 个公钥、\(secretKeys.count) 个私钥索引", kind: .success)
+                    self.appendLog("可用公钥：\n\(keys.map { $0.displayName }.joined(separator: "\n"))")
+                    self.appendLog("可用于签名的私钥索引：\n\(secretKeys.isEmpty ? "（未发现）" : secretKeys.map { $0.displayName }.joined(separator: "\n"))")
+                }
+                if secretResult.status != 0 {
+                    self.appendLog("读取私钥索引失败：\n\(Self.text(secretResult.stderr))")
+                }
             }
-            if gpgKeys.isEmpty {
-                announce("没有发现 GPG 公钥", kind: .warning)
-                appendLog("请先导入收件人的 OpenPGP 公钥，或手动输入邮箱/指纹。")
+        }
+    }
+
+    func refreshGPGKeyDetails() {
+        guard gpgToolPath != nil else {
+            announce("找不到 GPG", kind: .failure)
+            appendLog("请先安装 GnuPG：brew install gnupg")
+            return
+        }
+
+        runGPG(
+            arguments: ["--batch", "--list-keys", "--keyid-format", "long", "--with-subkey-fingerprint"],
+            operation: "读取主密钥和子密钥结构"
+        ) { [weak self] result in
+            guard let self else { return }
+            if result.status == 0 {
+                self.gpgKeyDetails = Self.text(result.stdout)
+                self.announce("密钥结构读取成功", kind: .success)
             } else {
-                announce("已读取 \(gpgKeys.count) 个 GPG 公钥", kind: .success)
-                appendLog("可用公钥：\n\(gpgKeys.map { $0.displayName }.joined(separator: "\n"))")
+                self.gpgKeyDetails = "读取失败：\n\(Self.text(result.stderr))"
+                self.announce("密钥结构读取失败", kind: .failure)
             }
         }
     }
@@ -798,6 +838,66 @@ final class PivyModel: ObservableObject {
         appendLog(steps)
     }
 
+    func openGPGExistingKeyMigrationWizard() {
+        guard gpgToolPath != nil else {
+            announce("找不到 GPG，无法打开迁移向导", kind: .failure)
+            appendLog("请先安装 GnuPG：brew install gnupg")
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "把已有 GPG 子密钥迁移到 YubiKey？"
+        alert.informativeText = "迁移前请先做 ~/.gnupg 的加密离线备份。迁移通常会让本机不再保留可直接使用的私钥；本向导只打开 Terminal 并显示步骤，不会自动选择或移动任何密钥。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "打开迁移向导")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            announce("已取消密钥迁移", kind: .info)
+            return
+        }
+
+        let commandFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pivy-openpgp-key-migration-\(UUID().uuidString).command")
+        let shellGPGPath = gpgToolPath!.replacingOccurrences(of: "'", with: "'\\''")
+        let terminalScript = """
+        #!/bin/zsh
+        clear
+        echo "Pivy OpenPGP 子密钥迁移向导"
+        echo "先确认已经完成 ~/.gnupg 的加密离线备份。"
+        echo ""
+        echo "第一步：下面显示本机主密钥和子密钥："
+        '\(shellGPGPath)' --list-secret-keys --keyid-format long
+        echo ""
+        echo "第二步：复制主密钥指纹，执行："
+        echo "gpg --edit-key YOUR_PRIMARY_FINGERPRINT"
+        echo ""
+        echo "第三步：在 gpg> 中选择 key N，然后执行 keytocard。"
+        echo "按提示选择 Signature、Encryption 或 Authentication。"
+        echo "完成后输入 save；不要执行 factory-reset 或 ykman piv reset。"
+        echo ""
+        echo "本窗口不会替你输入指纹、PIN，也不会自动移动密钥。"
+        zsh
+        rm -f -- "$0"
+        """
+
+        do {
+            try terminalScript.write(to: commandFile, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o700))],
+                ofItemAtPath: commandFile.path
+            )
+            let openProcess = Process()
+            openProcess.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            openProcess.arguments = ["-a", "Terminal", commandFile.path]
+            try openProcess.run()
+            announce("已打开子密钥迁移向导", kind: .info)
+            appendLog("迁移向导已打开：先备份 ~/.gnupg，再按 Terminal 中的 keytocard 步骤操作。")
+        } catch {
+            announce("无法打开迁移向导", kind: .failure)
+            appendLog("请手动执行：gpg --list-secret-keys --keyid-format long\n\(error.localizedDescription)")
+        }
+    }
+
     func publishGPGPublicKey() {
         guard let recipient = normalizedGPGRecipient() else { return }
         let keyserver = gpgKeyserver.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -852,6 +952,14 @@ final class PivyModel: ObservableObject {
         appendLog(instructions)
     }
 
+    func copyGPGKeyManagementSteps() {
+        let instructions = gpgKeyManagementInstructions
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(instructions, forType: .string)
+        announce("主密钥、子密钥和备用卡步骤已复制", kind: .success)
+        appendLog(instructions)
+    }
+
     func copyGPGPinentryRepairSteps() {
         let instructions = gpgPinentryRepairInstructions
         NSPasteboard.general.clearContents()
@@ -896,6 +1004,32 @@ final class PivyModel: ObservableObject {
         # 不要执行
         # factory-reset
         # ykman piv reset
+        """
+    }
+
+    private var gpgKeyManagementInstructions: String {
+        """
+        # 方案 A：推荐，直接在 YubiKey OpenPGP 卡上生成
+        gpg --card-edit
+        admin
+        generate
+
+        # 这会在卡上生成 OpenPGP 主密钥/子密钥结构；私钥不会从卡上导出。
+        # 生成后回到 Pivy：读取 OpenPGP 卡 → 读取本机公钥 → 导出公钥。
+
+        # 方案 B：已有电脑上的 GPG 私钥，迁移子密钥到 YubiKey
+        # 先做 ~/.gnupg 的加密离线备份，再执行：
+        gpg --list-secret-keys --keyid-format long
+        gpg --edit-key YOUR_PRIMARY_FINGERPRINT
+        # 在 gpg> 中：选择 key N，再执行 keytocard；按提示选择 Signature/Encryption/Authentication。
+        # 不要只备份公钥：公钥不能恢复私钥，也不能制作备用卡。
+
+        # 多张卡的备用方案
+        # 方案 1（推荐）：每张卡生成独立子密钥，并把每张卡的公钥分别登记到服务。
+        # 方案 2：复制同一套子密钥到多张卡；需要安全的私钥备份，便利性更高但隔离性更低。
+
+        # 备份与丢卡准备
+        # 保存主密钥撤销证书、主密钥指纹和每张卡的序列号；不要提交到 GitHub。
         """
     }
 
@@ -960,21 +1094,31 @@ final class PivyModel: ObservableObject {
             announce("请先拖入或选择要用 GPG 加密的文件", kind: .warning)
             return
         }
-        guard let recipient = normalizedGPGRecipient() else { return }
+        guard let recipient = normalizedGPGEncryptionRecipient() else { return }
         guard validateGPGFile(file, operation: "GPG 加密") else { return }
+        if gpgEncryptToSelf && gpgRecipient.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            announce("请先选择自己的公钥，或关闭“同时加密给自己”", kind: .warning)
+            return
+        }
         let outputURL = siblingURL(for: file, name: file.lastPathComponent + ".gpg")
-        let arguments = [
+        var recipients = [recipient]
+        if gpgEncryptToSelf, !gpgRecipient.isEmpty, gpgRecipient != recipient {
+            recipients.append(gpgRecipient)
+        }
+        var arguments = [
             "--batch", "--pinentry-mode", "default",
             "--output", outputURL.path,
-            "--trust-model", "always",
-            "--recipient", recipient,
-            "--encrypt", file.path
+            "--trust-model", "always"
         ]
+        for item in recipients {
+            arguments.append(contentsOf: ["--recipient", item])
+        }
+        arguments.append(contentsOf: ["--encrypt", file.path])
         runGPG(arguments: arguments, operation: "GPG 大文件加密") { [weak self] result in
             guard let self else { return }
             if result.status == 0 {
                 announce("GPG 加密完成", kind: .success)
-                appendLog("加密文件：\n\(outputURL.path)\n文件大小不受 PIV 8 KB 限制。")
+                appendLog("加密文件：\n\(outputURL.path)\n收件人公钥：\(recipients.joined(separator: ", "))\n文件大小不受 PIV 8 KB 限制。")
             } else {
                 announce("GPG 加密失败", kind: .failure)
                 appendLog(Self.text(result.stderr))
@@ -1018,9 +1162,11 @@ final class PivyModel: ObservableObject {
             return
         }
         guard validateGPGFile(file, operation: "GPG 签名") else { return }
+        guard let signer = normalizedGPGSigner() else { return }
         let outputURL = siblingURL(for: file, name: file.lastPathComponent + ".asc")
         let arguments = [
             "--batch", "--pinentry-mode", "default",
+            "--local-user", signer,
             "--armor", "--detach-sign",
             "--output", outputURL.path,
             file.path
@@ -1032,6 +1178,43 @@ final class PivyModel: ObservableObject {
                 appendLog("签名文件：\n\(outputURL.path)\nPIN 由 GPG Agent 的安全弹窗处理。")
             } else {
                 announce("GPG 签名失败", kind: .failure)
+                appendLog(Self.text(result.stderr))
+            }
+        }
+    }
+
+    func requestGPGSignAndEncrypt() {
+        guard let file = gpgEncryptFile else {
+            announce("请先拖入或选择要用 GPG 处理的文件", kind: .warning)
+            return
+        }
+        guard let recipient = normalizedGPGEncryptionRecipient() else { return }
+        guard let signer = normalizedGPGSigner() else { return }
+        guard validateGPGFile(file, operation: "GPG 签名并加密") else { return }
+
+        let outputURL = siblingURL(for: file, name: file.lastPathComponent + ".gpg")
+        var recipients = [recipient]
+        if gpgEncryptToSelf, !gpgRecipient.isEmpty, gpgRecipient != recipient {
+            recipients.append(gpgRecipient)
+        }
+        var arguments = [
+            "--batch", "--pinentry-mode", "default",
+            "--trust-model", "always",
+            "--local-user", signer,
+            "--output", outputURL.path
+        ]
+        for item in recipients {
+            arguments.append(contentsOf: ["--recipient", item])
+        }
+        arguments.append(contentsOf: ["--sign", "--encrypt", file.path])
+
+        runGPG(arguments: arguments, operation: "GPG 签名并加密") { [weak self] result in
+            guard let self else { return }
+            if result.status == 0 {
+                announce("GPG 签名并加密完成", kind: .success)
+                appendLog("输出文件：\n\(outputURL.path)\n收件人公钥：\(recipients.joined(separator: ", "))\n签名身份：\(signer)")
+            } else {
+                announce("GPG 签名并加密失败", kind: .failure)
                 appendLog(Self.text(result.stderr))
             }
         }
@@ -1065,6 +1248,24 @@ final class PivyModel: ObservableObject {
         let value = gpgRecipient.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else {
             announce("请输入 GPG 收件人邮箱或公钥指纹", kind: .warning)
+            return nil
+        }
+        return value
+    }
+
+    private func normalizedGPGEncryptionRecipient() -> String? {
+        let value = gpgEncryptRecipient.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            announce("请选择或输入收件人的 GPG 公钥", kind: .warning)
+            return nil
+        }
+        return value
+    }
+
+    private func normalizedGPGSigner() -> String? {
+        let value = gpgRecipient.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            announce("请选择自己的 GPG 签名身份", kind: .warning)
             return nil
         }
         return value
@@ -1753,7 +1954,7 @@ final class PivyModel: ObservableObject {
             let fields = line.split(separator: ":", omittingEmptySubsequences: false)
             guard let record = fields.first else { continue }
 
-            if record == "pub" {
+            if record == "pub" || record == "sec" {
                 appendCurrentKey()
                 primaryFingerprint = ""
                 primaryUserID = ""
@@ -2476,7 +2677,7 @@ struct ContentView: View {
                         guideFeatureRow(title: "设备 / 证书工具", detail: "PIV 工具 + YubiKey；用于读取设备、导出证书、公钥和生成 CSR。")
                         guideFeatureRow(title: "9c 文件签名 / 验证", detail: "PIV 工具；验证还需要 OpenSSL。超过 16 KB 的文件请改用 GPG。")
                         guideFeatureRow(title: "9d 文件加密 / 解密", detail: "PIV 工具；当前 .pivybox 的 box 模式适合小文件。大文件请使用 GPG。")
-                        guideFeatureRow(title: "GPG / OpenPGP", detail: "GnuPG + pinentry-mac + YubiKey OpenPGP 密钥；文件本体由电脑处理。")
+                        guideFeatureRow(title: "GPG / OpenPGP", detail: "GnuPG + pinentry-mac + YubiKey OpenPGP 密钥；文件本体由电脑处理。加密用对方公钥，解密用对方自己的私钥。")
                     }
                     .padding(4)
                 }
@@ -2532,8 +2733,10 @@ struct ContentView: View {
                             Text("1. 插入 YubiKey，在“设备”页点击“读取设备”。")
                             Text("2. 需要 PIV 签名、加密或 CSR 时，选择对应菜单并按提示输入 PIV PIN。")
                             Text("3. 需要 GPG 时，进入“GPG 工具 → 密钥与卡片”，读取 OpenPGP 卡或生成卡上密钥。")
-                            Text("4. GPG 的 PIN 在 GnuPG 安全弹窗中输入，不会进入本工具日志。")
-                            Text("5. 9c 验证需要原文件、.sig 和 .sig.cert.pem；GPG 验证需要原文件和 .asc/.sig。")
+                            Text("4. 给别人发密文：先导入对方公钥，核对指纹，再到“文件加密”选择对方公钥。")
+                            Text("5. 如果自己也要保留可解密副本，开启“同时加密给自己”；需要双方都能验证来源时使用“签名并加密”。")
+                            Text("6. GPG 的 PIN 在 GnuPG 安全弹窗中输入，不会进入本工具日志。")
+                            Text("7. 9c 验证需要原文件、.sig 和 .sig.cert.pem；GPG 验证需要原文件和 .asc/.sig。")
                         }
                         .font(.callout)
                         .padding(.top, 6)
@@ -2896,25 +3099,74 @@ struct ContentView: View {
 
     private var gpgKeysContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            GroupBox("本机公钥与收件人") {
+            GroupBox("我的 GPG 身份") {
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        TextField("输入邮箱或完整公钥指纹", text: $model.gpgRecipient)
-                            .textFieldStyle(.roundedBorder)
-                        Button("读取公钥") { model.refreshGPGKeys() }
-                            .disabled(model.busy)
-                        Button("导入公钥…") { model.importGPGPublicKey() }
-                            .disabled(model.busy)
+                    if !model.gpgSecretKeys.isEmpty {
+                        Picker("签名身份", selection: $model.gpgRecipient) {
+                            ForEach(model.gpgSecretKeys) { key in
+                                Text(key.displayName).tag(key.fingerprint)
+                            }
+                        }
+                        .pickerStyle(.menu)
                     }
+                    TextField("输入自己的邮箱或完整主密钥指纹", text: $model.gpgRecipient)
+                        .textFieldStyle(.roundedBorder)
+                    HStack(spacing: 8) {
+                        Button("读取公钥和私钥索引") { model.refreshGPGKeys() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(model.busy)
+                        Button("复制密钥管理步骤") { model.copyGPGKeyManagementSteps() }
+                    }
+                    Text("这里选择的是你的签名身份。签名时使用你的私钥；对方验证时只需要你的公钥。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(4)
+            }
+
+            GroupBox("收件人公钥库") {
+                VStack(alignment: .leading, spacing: 8) {
                     if !model.gpgKeys.isEmpty {
-                        Picker("已发现公钥", selection: $model.gpgRecipient) {
+                        Picker("加密给", selection: $model.gpgEncryptRecipient) {
+                            Text("请选择收件人公钥").tag("")
                             ForEach(model.gpgKeys) { key in
                                 Text(key.displayName).tag(key.fingerprint)
                             }
                         }
                         .pickerStyle(.menu)
                     }
-                    Text("邮箱只是公钥的 User ID；加密前请核对完整指纹，不能只凭邮箱判断身份。")
+                    HStack(spacing: 8) {
+                        TextField("输入对方邮箱或完整公钥指纹", text: $model.gpgEncryptRecipient)
+                            .textFieldStyle(.roundedBorder)
+                        Button("导入公钥…") { model.importGPGPublicKey() }
+                            .disabled(model.busy)
+                    }
+                    Text("电脑上的 GPG 公钥库可以保存很多人的公钥。加密时选择对方公钥；对方用自己的私钥/YubiKey 解密。邮箱只是 User ID，加密前请核对完整指纹。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(4)
+            }
+
+            GroupBox("主密钥与子密钥") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Button("读取密钥结构") { model.refreshGPGKeyDetails() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(model.busy)
+                        Text("主密钥负责身份与管理；签名、加密、认证通常由子密钥完成。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(model.gpgKeyDetails)
+                        .font(.system(size: 10, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Color.secondary.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    Text("推荐：直接在 YubiKey 上生成；已有电脑密钥时，再通过 gpg --edit-key → keytocard 迁移子密钥。只导入公钥不能恢复私钥，也不能制作备用卡。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -2930,7 +3182,9 @@ struct ContentView: View {
                             .buttonStyle(.borderedProminent)
                         Button("更换卡上密钥…") { model.openGPGCardKeyWizard(replace: true) }
                             .disabled(model.busy)
-                        Button("复制命令步骤") { model.copyOpenPGPSetupSteps() }
+                        Button("迁移已有子密钥…") { model.openGPGExistingKeyMigrationWizard() }
+                            .disabled(model.busy)
+                        Button("复制生成步骤") { model.copyOpenPGPSetupSteps() }
                     }
                     VStack(alignment: .leading, spacing: 5) {
                         Label("快速步骤", systemImage: "list.number")
@@ -3019,14 +3273,14 @@ struct ContentView: View {
                         Button("导出公钥…") { model.exportGPGPublicKey() }
                             .disabled(model.busy)
                     }
-                    Text("复制的是 ASCII-armored 公钥，不包含私钥；可以粘贴到邮件正文，或把 .asc 文件交给对方。")
+                    Text("复制的是自己的 ASCII-armored 公钥，不包含私钥；可以粘贴到邮件正文，或把 .asc 文件交给对方。收件人公钥请在上面的“收件人公钥库”导入。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 .padding(4)
             }
 
-            Text("注意：YubiKey OpenPGP 私钥通常不能导出。更换前请保留旧公钥和指纹；这不会重置 PIV 9a/9c/9d/9e。")
+            Text("注意：YubiKey OpenPGP 私钥通常不能导出。更换前请保留旧公钥、主密钥指纹、撤销证书和备用卡方案；这不会重置 PIV 9a/9c/9d/9e。")
                 .font(.caption)
                 .foregroundStyle(.orange)
         }
@@ -3034,6 +3288,33 @@ struct ContentView: View {
 
     private var gpgEncryptContent: some View {
         VStack(alignment: .leading, spacing: 10) {
+            GroupBox("第 1 步：选择收件人公钥") {
+                VStack(alignment: .leading, spacing: 8) {
+                    if !model.gpgKeys.isEmpty {
+                        Picker("收件人", selection: $model.gpgEncryptRecipient) {
+                            Text("请选择收件人公钥").tag("")
+                            ForEach(model.gpgKeys) { key in
+                                Text(key.displayName).tag(key.fingerprint)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                    HStack(spacing: 8) {
+                        TextField("对方邮箱或完整公钥指纹", text: $model.gpgEncryptRecipient)
+                            .textFieldStyle(.roundedBorder)
+                        Button("读取公钥库") { model.refreshGPGKeys() }
+                            .disabled(model.busy)
+                        Button("导入对方公钥…") { model.importGPGPublicKey() }
+                            .disabled(model.busy)
+                    }
+                    Toggle("同时加密给自己（建议开启，方便保留副本）", isOn: $model.gpgEncryptToSelf)
+                    Text("加密使用对方公钥；对方用自己的私钥/YubiKey 解密。开启后会额外加密给你的公钥，因此你也能解开自己保存的副本。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(4)
+            }
+
             HStack(alignment: .top, spacing: 10) {
                 GroupBox("GPG 大文件加密") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -3044,9 +3325,13 @@ struct ContentView: View {
                             choose: model.chooseGPGEncryptFile,
                             receive: { model.gpgEncryptFile = $0 }
                         )
-                        Button("GPG 加密") { model.requestGPGEncrypt() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(model.busy)
+                        HStack(spacing: 8) {
+                            Button("GPG 加密") { model.requestGPGEncrypt() }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(model.busy)
+                            Button("签名并加密") { model.requestGPGSignAndEncrypt() }
+                                .disabled(model.busy)
+                        }
                         Text("输出：原文件.gpg；不受 PIV 8 KB 限制。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -3073,7 +3358,7 @@ struct ContentView: View {
                     .padding(4)
                 }
             }
-            Text("GPG 使用混合加密：图片、压缩包等大文件由电脑本地对称加密，YubiKey 只保护会话密钥。")
+            Text("GPG 使用混合加密：图片、压缩包等大文件由电脑本地对称加密，YubiKey 只保护会话密钥或执行签名。推荐流程：导入对方公钥 → 核对指纹 → 选择文件 → 签名并加密 → 把 .gpg 文件发给对方。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -3081,6 +3366,26 @@ struct ContentView: View {
 
     private var gpgSignContent: some View {
         VStack(alignment: .leading, spacing: 10) {
+            GroupBox("第 1 步：选择自己的签名身份") {
+                VStack(alignment: .leading, spacing: 7) {
+                    if !model.gpgSecretKeys.isEmpty {
+                        Picker("签名身份", selection: $model.gpgRecipient) {
+                            ForEach(model.gpgSecretKeys) { key in
+                                Text(key.displayName).tag(key.fingerprint)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    } else {
+                        Text("尚未读取本机私钥索引，请先到“GPG 工具 → 密钥与卡片”读取。")
+                            .foregroundStyle(.orange)
+                    }
+                    Text("签名使用你的 YubiKey/OpenPGP 私钥；对方导入你的公钥后即可验证文件来源和完整性。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(4)
+            }
+
             GroupBox("GPG 文件签名与验证") {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .top, spacing: 10) {
