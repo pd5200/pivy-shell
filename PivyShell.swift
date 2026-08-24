@@ -2672,17 +2672,26 @@ private struct PageHeader: View {
             }
             Spacer(minLength: 12)
             HStack(spacing: 8) {
-                Picker(selection: $themeRawValue) {
+                Text("主题")
+                    .foregroundStyle(CyberpunkTheme.text)
+                Menu {
                     ForEach(AppTheme.allCases) { theme in
-                        Text(theme.title).tag(theme.rawValue)
+                        Button {
+                            themeRawValue = theme.rawValue
+                        } label: {
+                            Text(theme.title)
+                        }
                     }
                 } label: {
-                    Text(AppTheme(rawValue: themeRawValue)?.title ?? "主题")
+                    HStack(spacing: 4) {
+                        Text(AppTheme(rawValue: themeRawValue)?.title ?? "跟随系统")
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                    }
                         .foregroundStyle(CyberpunkTheme.text)
                 }
-                .pickerStyle(.menu)
+                .menuStyle(.borderlessButton)
                 .controlSize(.small)
-                .tint(CyberpunkTheme.text)
 
                 HStack(spacing: 7) {
                     Circle()
