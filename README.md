@@ -1,153 +1,267 @@
 # Pivy YubiKey 本地工具
 
-这是一个 macOS 原生 GUI 壳，调用本机已经安装的 `/opt/pivy/bin/pivy-tool`。
+一个面向 macOS 的 YubiKey PIV/OpenPGP 图形界面工具。它把 pivy-tool、GnuPG 和 macOS 的智能卡能力集中到一个窗口中，适合本地演示、日常文件签名/加密，以及服务器证书准备。
 
-## 构建和运行
+![Pivy YubiKey 本地工具](docs/pivy-shell-screenshot.png)
 
-在终端执行：
+> 本项目是 GUI 壳，不替代 YubiKey 固件。PIV 私钥仍留在 YubiKey 内；GPG 大文件由电脑上的 GnuPG 处理，YubiKey 负责需要保护的私钥操作。
 
-```bash
-cd pivy-shell
-./build.sh
-open "PivyShell.app"
-```
+## 功能总览
 
-## 功能
+### PIV
 
-- 左侧按功能分为“设备、文件签名、验证签名、文件加密、文件解密、GPG 工具、证书工具、使用说明”，并提供独立的“运行日志”页面；右侧每次只显示当前功能需要的控件；
-- 顶部还提供“证书工具”：导出槽位 SSH 公钥、导出证书、导出 YubiKey 槽位证明，以及生成服务器认证用 CSR；
-- 读取并校验 PIV 设备 JSON，显示阅读器、序列号、PIV 版本和槽位摘要；另外可读取 Pivy 版本和 Printed Info；
-- 使用 `9c` 对文件做分离签名，输出 `.sig`；
-- 同时导出签名证书，输出 `.sig.cert.pem`；
-- 使用原文件、`.sig` 和 `.sig.cert.pem` 验证 9c 签名；验证页支持一次拖入三个文件并按后缀自动归类；
-- 使用 `9d` 的 ECDH box 加密文件，输出 `.pivybox`；
-- 查看 `.pivybox` 元信息；
-- 使用同一把 YubiKey 解密 `.pivybox` 文件，输出 `.decrypted`，不会覆盖原文件。
-- 当前底层 `pivy-tool` 对 `box` 输入限制为 8.0 KB、对 `sign` 输入限制为 16.0 KB；超过限制会在界面显示错误并保留窗口，不会自动退出。
-- GPG 工具支持任意大小文件的 OpenPGP 加密、解密、分离签名和签名验证；文件本体由 GPG 在电脑上处理，YubiKey OpenPGP 应用负责私钥操作。
-- GPG 工具提供 OpenPGP 卡状态读取、公钥导出和生成步骤复制；公钥由密钥对生成后通过 `gpg --armor --export` 导出。
-- GPG 页面把“我的签名身份”和“收件人公钥库”分开；本机可以保存多个人的公钥，文件加密时选择对方公钥，不会再和自己的签名密钥混用。
-- GPG 文件加密支持“同时加密给自己”，并支持“签名并加密”；这样对方可以用自己的私钥解密，你也可以用自己的私钥解开留存副本。
-- GPG 密钥管理页可以读取主密钥/子密钥结构，显示本机可用于签名的私钥索引，并提供主密钥、子密钥、迁移到卡片和备用 YubiKey 的步骤说明。
-- GPG 工具会自动查找 `/opt/homebrew/bin/gpg`、`/usr/local/bin/gpg` 和 GPG Suite 路径；未安装时会在界面提示 `brew install gnupg`。
-- 证书工具中的槽位由设备读取结果生成下拉菜单；槽位诊断可用 `auth` 做往返签名校验。
-- 主窗口设有最小尺寸，支持调整大小和最大化；左侧设备卡片、导航和右侧页面标题保持统一边界。
-- 日志默认展开并固定在底部，向上展开，不挤压页面；也可以收起为状态条，或从左侧进入独立日志页完整查看。
-- 各功能页面都有独立的拖放区域：签名/加密只接受待处理原文件，验证签名分为原文件、`.sig`、证书三个区域，解密只接受 `.pivybox`。
-- 签名、加密、解密分别保存自己的文件选择状态；上一页载入的图片不会自动带入其他页面。
-- 底部日志抽屉保留统一的彩色状态提示、日志行数以及复制、保存、清空快捷操作。
-- “使用说明”页会检查 `pivy-tool`、GnuPG、`pinentry-mac` 和 OpenSSL，并按缺失项目显示安装命令；推荐使用 `brew install --cask pivy-app` 安装 PIV 工具，避免把 Homebrew 中同名的 `pivy` Python 包误当成这里的 PIV 工具。
-- PIV 读取遇到疑似 CCID/scdaemon 会话冲突时，会自动执行 `gpgconf --kill scdaemon` 并重试一次；使用说明页也提供手动释放按钮。该操作不会删除 GPG 密钥或 PIV 证书。
+- **设备**：读取 YubiKey、阅读器、序列号、PIV 版本和 9a/9c/9d/9e 槽位摘要。
+- **文件签名**：用 9c 对小文件生成分离签名 .sig，同时导出 .sig.cert.pem 证书。
+- **验证签名**：拖入原文件、.sig 和 .sig.cert.pem，程序会按后缀自动归类并验证。
+- **文件加密/解密**：用 9d 生成和解开 .pivybox；原文件不会被覆盖。
+- **证书工具**：选择槽位，导出公钥、证书、槽位证明，或生成服务器认证用 CSR。
+- **9a 诊断**：用卡内 9a 私钥做往返认证，帮助发现公钥与私钥不匹配的问题。
 
-## GPG 密钥管理流程
+### GPG / OpenPGP
 
-GPG 工具页分为“概览、密钥与卡片、文件加密、签名验证、公布公钥”五个二级菜单：
+- 任意大小文件的 OpenPGP 加密、解密、分离签名和签名验证。
+- 保存多个收件人的公钥；加密时选择对方公钥，而不是误用自己的签名身份。
+- 支持同时加密给自己，方便发送文件后保留可解密的本地副本。
+- 读取 OpenPGP 卡状态、公钥、私钥索引和主密钥/子密钥结构。
+- 提供在 YubiKey 上生成密钥、把已有子密钥迁移到卡片、导出/复制公钥和发布公钥的向导。
 
-- “密钥与卡片”可读取 OpenPGP 卡、读取/导入本机公钥、读取私钥索引、查看主密钥/子密钥结构、复制或导出公钥，并打开 `gpg --card-edit` 生成或更换 YubiKey 上的 OpenPGP 密钥；生成/更换不会执行 `factory-reset`，也不会触碰 PIV 槽位；
-- 推荐直接在 YubiKey 上生成 OpenPGP 密钥。已有电脑密钥时，必须先做加密离线备份，再通过 `gpg --edit-key` 和 `keytocard` 把选中的子密钥迁移到卡片；只导入公钥不能恢复私钥，也不能制作备用卡。
-- 主密钥用于身份和密钥管理，签名、加密、认证通常使用不同的子密钥。界面中的“我的 GPG 身份”用于选择签名身份，“收件人公钥库”用于选择加密对象。
-- 多张 YubiKey 默认是独立的。更稳妥的备用方案是为每张卡生成独立子密钥，并把对应公钥分别登记到服务；复制同一套子密钥更方便，但需要安全保存私钥备份，隔离性更低。
-- “公布公钥”可把 ASCII-armored 公钥复制到邮件/网站、导出 `.asc` 文件，或在确认指纹后发布到 `hkps://keys.openpgp.org`；发布到公共服务器会产生公开网络记录；
-- 生成卡上密钥时，Terminal 中依次输入 `admin`、`generate`；卡上生成的 OpenPGP 私钥通常不能导出。更换前先保存旧公钥和指纹，并通过另一条可信渠道核对公钥指纹。
-- GPG 说明按“快速步骤 / PIN 窗口异常修复”分层显示，默认不展开长说明；若出现 `Screen or window too small`，先退出 `gpg/card>`，再在普通 Terminal 执行：
+### 使用体验
 
-  ```bash
-  mkdir -p ~/.gnupg
-  printf '%s\n' 'pinentry-program /opt/homebrew/bin/pinentry-mac' >> ~/.gnupg/gpg-agent.conf
-  gpgconf --kill gpg-agent
-  ```
+- 插入或拔出 YubiKey 后自动监测并更新左上角状态。
+- 日志固定在窗口底部，可展开、收起、复制、保存或清空；新日志自动滚动到最底部。
+- PIN 只通过系统弹窗输入，不写入日志；失败时保留界面，不自动退出。
+- 主题支持赛博朋克、浅色、深色和跟随系统。
+- “使用说明”会检查依赖，只显示当前缺少的安装项。
 
-  然后重新执行 `gpg --card-edit`。这只配置 GPG Agent 的 PIN 弹窗，不会重置 OpenPGP 或 PIV 数据。
+## 重要边界：什么时候用 PIV，什么时候用 GPG
 
-## 从零安装与首次使用
+| 需求 | 推荐功能 | 说明 |
+| --- | --- | --- |
+| 服务器 SSH/证书认证 | PIV 9a + 证书/公钥/CSR | 服务器保存公钥或 CA 签发的证书，私钥留在卡内 |
+| 小文件完整性证明 | PIV 9c | 受 pivy-tool 输入大小限制，适合配置、文本和小型文件 |
+| 小文件的卡内加密演示 | PIV 9d | 产生 .pivybox，必须用支持该格式的 Pivy 工具解密 |
+| 大图片、大文档、归档文件 | GPG | 文件本体由电脑处理，YubiKey OpenPGP 私钥用于解密/签名 |
+| Git commit/tag 签名 | GPG 签名子密钥 | Git 调用 GnuPG 生成可验证的提交签名 |
+| 9e 卡片认证 | PIV 9e | 通常由企业卡片系统或专用协议使用，个人日常很少直接操作 |
 
-如果电脑上只有本工具，打开左侧“使用说明”，按“环境检查”逐项安装。常用安装命令如下：
+PIV 的 9a/9c/9d/9e 是四个用途不同的 PIV 槽位，和 YubiKey 的 OpenPGP/GPG 应用是两套独立体系。PIV 证书不能直接当成 GPG 公钥，GPG 密钥也不会自动出现在 PIV 槽位中。
 
-```bash
-# 没有 Homebrew 时先安装（按 Homebrew 的终端提示完成安装）
+## 安装
+
+### 依赖
+
+- macOS
+- 一把支持 CCID 的 YubiKey
+- PIV 功能：pivy-tool
+- GPG 功能：GnuPG 和 pinentry-mac
+- CSR/证书相关操作：OpenSSL
+
+如果电脑没有 Homebrew，先按终端提示安装：
+
+~~~bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+~~~
 
-# PIV 功能：pivy-tool、pivy-box、pivy-agent
+安装依赖：
+
+~~~bash
+# PIV：安装 pivy-tool、pivy-box 等组件
 brew install --cask pivy-app
 
-# GPG/OpenPGP 功能和 PIN 安全弹窗
+# GPG/OpenPGP 和 macOS PIN 弹窗
 brew install gnupg pinentry-mac
 
-# 配置 GPG PIN 弹窗；$(brew --prefix) 会自动适配 Apple Silicon 或 Intel Mac
-mkdir -p ~/.gnupg
-printf 'pinentry-program %s\n' "$(brew --prefix)/bin/pinentry-mac" >> ~/.gnupg/gpg-agent.conf
-gpgconf --kill gpg-agent
-```
+# CSR/证书工具需要 OpenSSL；macOS 自带版本通常也可用
+brew install openssl@3
+~~~
 
-macOS 自带 PC/SC 读卡框架，PIV 功能通常不需要另外安装 `pcscd` 或 OpenSC；`ykman` 也不是本工具的必需依赖。安装后插入 YubiKey，进入“设备”页点击“读取设备”；GPG 功能再进入“GPG 工具”页读取 OpenPGP 卡。
+如果只想使用 PIV，不必安装 GPG；如果只想使用 GPG，也不必把 PIV 证书导入 OpenPGP 卡。
 
-## 注意
+### 构建和启动
 
-1. `pivy` 不是传统的 `.app`，而是命令行工具；本项目是它的 GUI 壳。
-2. 每次签名、加密或解密前会弹出 PIN 窗口。PIN 不会写入文件或日志，操作结束后清空。当前 MVP 为了让 GUI 能调用 `pivy-tool`，会把 PIN 作为短命子进程参数传递；不要在共享电脑上使用默认 PIN，也不要把 PIN 写进脚本。
-3. 9c 输出的是分离签名文件，验证时需要原文件、`.sig` 和对应的 `.sig.cert.pem`。验证只检查密码学签名是否匹配，不代表自签名证书已被系统信任。
-4. 当前 9d 加密格式采用 `pivy-tool box 9d` 的 Pivy ECDH box 格式，只能由支持该格式的 Pivy 工具解密。
-5. 图片等大文件需要改用 `pivy-box stream` 流式模式；本 GUI 当前会先提示大小限制，不会把大文件交给 `pivy-tool box`。
-6. GPG 加密前需要本机安装 GnuPG，并先在 GPG 工具页读取或输入收件人的公钥指纹。解密和签名时，GPG Agent 会弹出自己的 PIN/触摸提示；该 PIN 不会进入本工具日志。
-7. GPG 加密使用收件人的公钥，对方使用自己的私钥/YubiKey 解密；推荐开启“同时加密给自己”，否则你自己可能无法解开发送前保存的密文副本。
-8. 签名只证明内容完整且由对应私钥签署；是否确实属于某个人，还需要通过另一条可信渠道核对公钥指纹。
+~~~bash
+git clone https://github.com/pd5200/pivy-shell.git
+cd pivy-shell
+./build.sh
+open PivyShell.app
+~~~
 
-## 项目结构
+也可以直接打开已构建的 PivyShell.app。第一次使用时进入“使用说明”，程序会显示实际检测到的工具路径和缺少的组件。
 
-```text
-PivyShell.swift       macOS SwiftUI 主程序
-Info.plist            App Bundle 信息
-IconGenerator.swift   生成 PIV 钥匙/盾牌风格的 macOS 应用图标
-build.sh              编译程序、生成 AppIcon.icns 并组装 PivyShell.app
-README.md             使用、安装和安全说明
-```
+## 第一次使用
 
-本仓库只保存源代码和构建文件。`PivyShell.app`、图标中间文件、日志、签名结果和 `.pivybox` 文件默认不会提交。
+1. 安装所需依赖并插入 YubiKey。
+2. 打开“设备”，等待左上角从“等待设备”变为已连接，然后点击“读取设备”。
+3. 需要 PIV 时，确认 9a/9c/9d/9e 槽位和证书用途；需要 GPG 时，进入“GPG 工具 → 密钥与卡片”，读取 OpenPGP 卡。
+4. 执行签名、解密或卡内密钥操作时，在弹出的 PIN 窗口输入 PIN，并按系统提示触摸 YubiKey。
+5. 任何失败都先看底部“运行日志”。窗口不会因为单个文件或设备错误而关闭。
 
-## 设计边界
+插拔状态由程序自动监测。如果底层 CCID 被其他程序占用，先关闭 Yubico Authenticator、GPG 终端会话等读卡程序，再点击“读取设备”。应用也会尝试释放 GPG 的 scdaemon 会话并重试。
 
-- 本项目是 `pivy-tool`、GPG 和 macOS PC/SC 的 GUI 壳，不替代 YubiKey 的 PIV/OpenPGP 固件。
-- PIV 的 9a/9c/9d/9e 私钥仍留在 YubiKey 内；大文件由电脑上的 GPG 处理，YubiKey 只执行私钥相关操作。
-- 本项目不会提供 `factory-reset`、`ykman piv reset`、改 PIN、改 PUK 或导入私钥按钮，避免在图形界面中误清空卡片。
-- “读取设备”以及其他 PIV 操作遇到 GPG `scdaemon` 占用时，会尝试释放读卡会话并重试一次；这不会删除密钥或证书。
+## PIV 操作流程
+
+### 9c 文件签名和验证
+
+签名输出两个文件：
+
+~~~text
+报告.pdf.sig
+报告.pdf.sig.cert.pem
+~~~
+
+把这三个文件交给对方：原文件、.sig、.sig.cert.pem。对方在“验证签名”页面分别拖入三个区域即可。验证结果表示“文件内容没有被修改，且签名与该证书匹配”；如果证书是自签名证书，还需要通过其他可信渠道核对证书指纹，不能仅凭文件名判断身份。
+
+### 9d 文件加密和解密
+
+9d 的 .pivybox 是 Pivy 专用格式，只适合小文件演示。PIV 槽位本身不是通用的大文件加密引擎，图片或大型文档应使用 GPG 页面。
+
+~~~text
+原文件 → 9d 加密 → 原文件.pivybox → 9d 解密 → 原文件.decrypted
+~~~
+
+### 9a 服务器认证和 CSR
+
+服务器认证通常使用 9a：
+
+1. 在“证书工具”选择 9a 槽位。
+2. 在卡内生成密钥或使用已有密钥。
+3. 导出公钥，或生成 CSR 交给企业 CA/服务器管理系统签发证书。
+4. 服务器保存公钥/证书；以后认证时，YubiKey 负责用 9a 私钥签名，私钥不会离开卡片。
+
+CSR 不是私钥，也不是最终证书，而是“请 CA 根据这个公钥和身份信息签发证书”的申请文件。直接导出公钥适合服务器自己做公钥认证；需要标准证书链时使用 CSR。
+
+## GPG：公钥、主密钥和子密钥
+
+### 最重要的概念
+
+| 对象 | 作用 | 日常是否放在 YubiKey |
+| --- | --- | --- |
+| 主密钥（Primary key） | 代表你的长期身份，签署/管理子密钥 | 通常离线保存，不用于每天操作 |
+| 签名子密钥（S） | 签署文件、Git commit/tag | 推荐放入卡片 |
+| 加密子密钥（E） | 解密发给你的文件 | 推荐放入卡片 |
+| 认证子密钥（A） | SSH/其他认证场景 | 按需放入卡片 |
+
+加密使用**对方的 E 子密钥公钥**。对方用自己的 E 子密钥私钥解密。签名使用你的 S 子密钥私钥，对方用你的公钥验证。
+
+主密钥不会自动“解开所有子密钥加密的文件”。能否解密取决于对应的 E 子密钥私钥是否还存在。主密钥主要负责证明身份、签署和管理子密钥；不要因为有主密钥就删除或丢弃旧的加密子密钥备份。
+
+### 两种安全建立方式
+
+#### 方案 A：直接在 YubiKey OpenPGP 卡上生成
+
+适合新建身份，私钥从生成时就留在卡上：
+
+1. 安装 GnuPG 和 pinentry-mac。
+2. 在“GPG 工具 → 密钥与卡片”点击“生成卡上密钥”。
+3. 在 Terminal 向导中输入 admin，再输入 generate。
+4. 按提示填写姓名、邮箱、PIN 和备份选项。
+5. 回到应用点击“读取 OpenPGP 卡”和“读取公钥”，然后导出 .asc 公钥。
+
+卡上生成的私钥通常不能从 YubiKey 导出，因此必须准备备用卡或离线备份方案。
+
+#### 方案 B：电脑离线保管主密钥，再把子密钥迁移到卡
+
+适合需要多张备用卡、离线主密钥和更完整密钥生命周期管理的场景：
+
+1. 在离线、受保护的电脑上生成主密钥。
+2. 用主密钥生成 S/E/A 子密钥。
+3. 备份主密钥、子密钥和撤销证书，并核对指纹。
+4. 在应用的“密钥管理”页打开“迁移已有子密钥”，用 GnuPG 的 keytocard 将选定子密钥写入 YubiKey。
+5. 导出公钥，交给通信对象、Git 平台或服务器。
+
+迁移到卡片后，GnuPG 通常会把对应的私钥标记为卡上私钥；不要在没有备份的情况下删除电脑上的密钥材料。主密钥应尽量离线保存，日常使用卡上的子密钥。
+
+### 子密钥过期和密文
+
+- 子密钥过期主要阻止它继续用于新的签名或加密，不会自动擦除历史密文。
+- 只要旧 E 子密钥私钥仍在卡片或安全备份中，通常仍可解开以前发给它的密文。
+- 轮换 E 子密钥后，新文件使用新公钥；旧文件仍需要保留旧 E 私钥才能解密。
+- 因此不要只保留最新公钥，也不要在没有迁移/备份计划时删除旧加密子密钥。
+
+### 多个收件人和公布公钥
+
+应用可以在电脑上保存多个公钥。加密前在“收件人公钥库”中选择对方的邮箱或指纹；建议同时勾选“加密给自己”，否则你可能无法用自己的私钥打开发出前保存的密文。
+
+公布公钥前先核对完整指纹。可以：
+
+- 复制 ASCII-armored 公钥，放入邮件、网站或代码仓库；
+- 导出 gpg-public-key.asc 文件；
+- 发布到 OpenPGP 公钥服务器。公钥本身可以公开，但指纹仍应通过另一条可信渠道确认。
+
+## GPG PIN 弹窗异常
+
+如果出现 Screen or window too small、PIN 窗口不出现或 gpg/card> 卡住：
+
+1. 在 gpg/card> 输入 q 退出卡片编辑。
+2. 在普通 Terminal 执行：
+
+   ~~~bash
+   mkdir -p ~/.gnupg
+   printf '%s\n' 'pinentry-program /opt/homebrew/bin/pinentry-mac' >> ~/.gnupg/gpg-agent.conf
+   gpgconf --kill gpg-agent
+   ~~~
+
+   Intel Mac 可将路径改为 /usr/local/bin/pinentry-mac；也可以使用更通用的 $(brew --prefix)/bin/pinentry-mac。
+3. 重新打开 GPG 操作。PIN 应由 pinentry-mac 弹窗接管，而不是在 GUI 或日志中输入。
+
+这几条命令只配置 GPG Agent 的 PIN 弹窗并重启 Agent，不会清空 OpenPGP 卡，也不会修改 PIV 槽位。
 
 ## 常见问题
 
-### 出现 `no PIV cards/tokens found`
+### no PIV cards/tokens found
 
-这通常是 GPG `scdaemon` 或其他智能卡程序暂时占用 CCID 读卡会话。关闭正在使用 YubiKey 的程序，重新点击操作；也可以在“使用说明 → 读卡冲突处理”中点击“释放 GPG 读卡会话”。命令行等价于：
+通常是 CCID 被 GPG scdaemon、Yubico Authenticator 或其他智能卡程序占用。关闭这些程序后重新插拔 YubiKey，再点击“读取设备”。也可以在“使用说明 → 读卡冲突处理”点击释放会话；命令行等价于：
 
-```bash
+~~~bash
 gpgconf --kill scdaemon
-```
+~~~
 
-### 9a 槽位校验出现 `incorrect signature`
+### 返回内容不是有效的 PIV JSON
 
-9a 校验会让卡内私钥签名，再用槽位公钥验证。先用 YubiKey Manager 独立确认：
+这是底层工具没有返回可解析的设备信息，常见原因是读卡会话刚切换、设备刚插拔或 CCID 被占用。应用会自动重试一次；如果仍失败，重新插入 YubiKey，再执行“读取设备”。
 
-```bash
+### 9a 出现 incorrect signature
+
+这表示卡内 9a 私钥签出的结果无法用当前 9a 公钥验证。常见原因是私钥曾被重新生成但证书/公钥没有同步，或底层工具存在 ECDSA 兼容问题。先独立验证：
+
+~~~bash
 ykman piv keys export 9a - --verify
-```
+~~~
 
-如果独立验证也失败，通常需要重新生成 9a 的密钥和证书，并同步更新服务器上的公钥；不要直接执行 PIV reset 或 factory reset。如果独立验证成功而 `pivy-tool auth` 失败，则应优先怀疑底层工具的 ECDSA 兼容问题。
+确认失败后再重新生成 9a 密钥和证书，并同步更新服务器公钥。不要把 factory-reset 或 ykman piv reset 当作普通修复命令。
 
-### GPG 出现 `Screen or window too small`
+### 为什么 PIV 加密/签名提示大小限制
 
-先退出 `gpg/card>`（输入 `q`），在普通 Terminal 执行：
+PIV 槽位适合“私钥运算”，不是用来直接吞吐任意大小文件的对称加密引擎。当前 GUI 使用的 pivy-tool box 对输入大小有上限，超过时会提示并保留界面；大文件请切换到 GPG。
 
-```bash
-mkdir -p ~/.gnupg
-printf '%s\n' 'pinentry-program /opt/homebrew/bin/pinentry-mac' >> ~/.gnupg/gpg-agent.conf
-gpgconf --kill gpg-agent
-```
+## 安全提醒
 
-然后重新执行 `gpg --card-edit`。这只配置 GPG Agent 的 PIN 弹窗，不会重置 OpenPGP 或 PIV 数据。
+- 永远不要把 PIN、PUK、管理密钥写入脚本、截图或日志。
+- 生成或更换 OpenPGP 密钥前，先导出旧公钥、记录指纹，并确认有备用卡或离线备份。
+- 不要在本工具中执行 factory-reset 或 ykman piv reset。这些是清空/重置卡片的高风险操作，不是普通读卡故障修复。
+- PIV 和 OpenPGP 是独立应用：重置 PIV 不等于重置 GPG，反之亦然；但任何卡片级重置前都应先确认影响范围。
+- 私钥丢失通常无法通过公钥恢复。发现 YubiKey 丢失时，应立即撤销/停用对应证书或 GPG 子密钥，并用备用密钥重新注册服务器、Git 和其他服务。
 
-## 开发和提交前检查
+## 项目结构
 
-```bash
+~~~text
+PivyShell.swift       macOS SwiftUI 主程序
+Info.plist            App Bundle 信息
+IconGenerator.swift   生成应用图标
+build.sh              编译程序、生成图标并组装 PivyShell.app
+docs/                 README 使用截图
+README.md             使用、安装和安全说明
+~~~
+
+## 开发
+
+~~~bash
 ./build.sh
 git diff --check
-```
+~~~
 
-构建完成后会在项目目录生成 `PivyShell.app`。该应用是本地开发构建，未进行 Apple Developer ID 签名或公证；首次打开时 macOS 可能需要在“系统设置 → 隐私与安全性”允许运行。
+构建会在项目目录生成 PivyShell.app。这是本地开发构建，未进行 Apple Developer ID 签名或公证；首次打开时 macOS 可能需要在“系统设置 → 隐私与安全性”允许运行。
+
+## 许可证
+
+当前仓库未附加独立许可证文件；如需对外分发，请先补充许可证并确认 pivy-tool、GnuPG 及其他依赖的各自许可条款。
