@@ -88,6 +88,38 @@ open PivyShell.app
 
 也可以直接打开已构建的 PivyShell.app。第一次使用时进入“使用说明”，程序会显示实际检测到的工具路径和缺少的组件。
 
+### 下载已发布版本
+
+以后可以直接从 [GitHub Releases](https://github.com/pd5200/pivy-shell/releases) 下载带有版本号的 macOS Universal 压缩包。它同时包含 Apple Silicon 和 Intel 两种架构，下载后解压即可打开 PivyShell.app；首次运行可能需要在“系统设置 → 隐私与安全性”中允许运行。
+
+Release 只提供应用本体，不会把 pivy-tool、GnuPG 或 PIN 弹窗一起打包。根据需要打开应用的“使用说明”页安装依赖，并用压缩包旁边的 .sha256 文件校验下载完整性。
+
+## 自动构建和发布
+
+仓库中的 .github/workflows/macos-release.yml 会在以下情况运行：
+
+- 推送 v 开头的版本标签，例如 v0.12.0；
+- 在 GitHub Actions 页面手动运行，并填写版本标签。
+
+Action 使用 GitHub 的 macOS runner 构建 Universal App，生成：
+
+~~~text
+PivyShell-<版本>-macOS-universal.zip
+PivyShell-<版本>-macOS-universal.zip.sha256
+~~~
+
+构建成功后会自动创建或更新对应的 GitHub Release。以后发布新版本只需要先修改代码和 Info.plist 版本号，然后提交、推送并创建标签：
+
+~~~bash
+git add .
+git commit -m "Prepare next release"
+git push origin main
+git tag v0.12.0
+git push origin v0.12.0
+~~~
+
+也可以不在本地创建标签，直接到仓库的 Actions 页面运行 “Build macOS release”，填写要发布的标签。
+
 ## 第一次使用
 
 1. 安装所需依赖并插入 YubiKey。
