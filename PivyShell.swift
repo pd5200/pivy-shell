@@ -2658,14 +2658,24 @@ private struct PageHeader: View {
             }
             Spacer(minLength: 12)
             HStack(spacing: 8) {
-                Picker("主题", selection: $themeRawValue) {
+                Picker(selection: $themeRawValue) {
                     ForEach(AppTheme.allCases) { theme in
                         Text(theme.title).tag(theme.rawValue)
                     }
+                } label: {
+                    Label("主题", systemImage: "paintbrush.fill")
                 }
                 .pickerStyle(.menu)
                 .controlSize(.small)
-                .labelsHidden()
+                .foregroundStyle(CyberpunkTheme.text)
+                .padding(.horizontal, 8)
+                .frame(minHeight: 28)
+                .background(CyberpunkTheme.surfaceRaised.opacity(0.98))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(CyberpunkTheme.border.opacity(0.92), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 8))
 
                 HStack(spacing: 7) {
                     Circle()
@@ -2677,15 +2687,15 @@ private struct PageHeader: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
+                .padding(.horizontal, 10)
+                .frame(minHeight: 28)
+                .background(model.statusKind.background.overlay(CyberpunkTheme.surfaceRaised))
+                .overlay(
+                    Capsule()
+                        .stroke(model.statusKind.color.opacity(0.45), lineWidth: 1)
+                )
+                .clipShape(Capsule())
             }
-            .padding(.horizontal, 8)
-            .frame(minHeight: 28)
-            .background(model.statusKind.background.overlay(CyberpunkTheme.surfaceRaised))
-            .overlay(
-                Capsule()
-                    .stroke(model.statusKind.color.opacity(0.45), lineWidth: 1)
-            )
-            .clipShape(Capsule())
         }
         .frame(maxWidth: .infinity, minHeight: 50, maxHeight: 50, alignment: .topLeading)
     }
@@ -3118,9 +3128,16 @@ struct ContentView: View {
 
                 GroupBox("GPG 主密钥、子密钥与丢失恢复") {
                     VStack(alignment: .leading, spacing: 7) {
-                        Text("主密钥是你的长期身份和管理根；子密钥分别承担签名（S）、加密（E）和认证（A）。日常使用通常只把子密钥放进 YubiKey，主密钥保存在离线加密备份中。")
+                        Text("先记住：主密钥通常在安全电脑或离线环境生成，用来确认身份、生成和管理子密钥；日常使用时只把子密钥放进 YubiKey，主密钥不要长期放在日常电脑里。")
                             .font(.callout)
-                        Text("推荐流程：先保存主密钥指纹、公开撤销证书和加密备份 → 创建 S/E/A 子密钥 → 在“GPG 工具 → 密钥与卡片”中生成或迁移到 YubiKey → 导出公钥给别人。")
+                        Text("子密钥分工：S = 数字签名，E = 加密/解密，A = SSH 或其他身份认证。推荐流程：备份主密钥和撤销证书 → 用主密钥创建 S/E/A 子密钥 → 把子密钥迁移到 YubiKey → 导出公钥给别人。")
+                            .font(.caption)
+                        Text("主密钥不是万能解密钥匙：别人用你的 E 子密钥公钥加密，解密时必须使用对应的 E 子密钥私钥。主密钥只能在你仍有密钥备份时帮助你生成新的子密钥，不能凭空恢复已经丢失的旧 E 子密钥。")
+                            .font(.caption)
+                        Text("子密钥可以设置过期时间。过期后通常不能用于新的加密或签名；已经加密的旧文件，只要旧 E 子密钥私钥仍然保留，通常仍可解密。轮换密钥时不要删除旧子密钥，否则旧文件可能无法解密。")
+                            .font(.caption)
+                            .foregroundStyle(CyberpunkTheme.orange)
+                        Text("如果你选择“直接在 YubiKey 上生成”，密钥会在卡内创建，私钥不会导出；这是更安全但更依赖备份卡的流程。若选择“迁移已有子密钥”，则先在电脑安全生成，再把子密钥放入卡片。")
                             .font(.caption)
                         Text("常用检查命令：\ngpg --list-secret-keys --keyid-format LONG\ngpg --edit-key <主密钥指纹>\n# 交互界面中使用 addkey 创建子密钥；选中子密钥后使用 keytocard 迁移到卡片\ngpg --export --armor <主密钥指纹> > public-key.asc")
                             .font(.system(.caption, design: .monospaced))
