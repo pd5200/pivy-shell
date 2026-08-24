@@ -2680,6 +2680,7 @@ private struct PageHeader: View {
                 .pickerStyle(.menu)
                 .controlSize(.small)
                 .labelsHidden()
+                .foregroundStyle(CyberpunkTheme.text)
                 .tint(CyberpunkTheme.text)
 
                 HStack(spacing: 7) {
