@@ -48,15 +48,9 @@ private enum ThemeRole: String {
 private enum ThemeRuntime {
     static let defaultsKey = "pivy.theme"
 
-    static func dynamicColor(_ role: ThemeRole) -> Color {
-        Color(
-            nsColor: NSColor(
-                name: NSColor.Name("PivyTheme.\(role.rawValue)"),
-                dynamicProvider: { appearance in
-                    nsColor(role, appearance: appearance)
-                }
-            )
-        )
+    static func fixedColor(_ role: ThemeRole) -> Color {
+        let appearance = NSApp?.effectiveAppearance ?? NSAppearance(named: .aqua)!
+        return Color(nsColor: nsColor(role, appearance: appearance))
     }
 
     static func nsColor(_ role: ThemeRole, appearance: NSAppearance) -> NSColor {
@@ -128,18 +122,18 @@ private enum ThemeRuntime {
 }
 
 private enum CyberpunkTheme {
-    static let background = ThemeRuntime.dynamicColor(.background)
-    static let surface = ThemeRuntime.dynamicColor(.surface)
-    static let surfaceRaised = ThemeRuntime.dynamicColor(.surfaceRaised)
-    static let surfaceBright = ThemeRuntime.dynamicColor(.surfaceBright)
-    static let cyan = ThemeRuntime.dynamicColor(.cyan)
-    static let violet = ThemeRuntime.dynamicColor(.violet)
-    static let magenta = ThemeRuntime.dynamicColor(.magenta)
-    static let orange = ThemeRuntime.dynamicColor(.orange)
-    static let green = ThemeRuntime.dynamicColor(.green)
-    static let text = ThemeRuntime.dynamicColor(.text)
-    static let muted = ThemeRuntime.dynamicColor(.muted)
-    static let border = ThemeRuntime.dynamicColor(.border)
+    static var background: Color { ThemeRuntime.fixedColor(.background) }
+    static var surface: Color { ThemeRuntime.fixedColor(.surface) }
+    static var surfaceRaised: Color { ThemeRuntime.fixedColor(.surfaceRaised) }
+    static var surfaceBright: Color { ThemeRuntime.fixedColor(.surfaceBright) }
+    static var cyan: Color { ThemeRuntime.fixedColor(.cyan) }
+    static var violet: Color { ThemeRuntime.fixedColor(.violet) }
+    static var magenta: Color { ThemeRuntime.fixedColor(.magenta) }
+    static var orange: Color { ThemeRuntime.fixedColor(.orange) }
+    static var green: Color { ThemeRuntime.fixedColor(.green) }
+    static var text: Color { ThemeRuntime.fixedColor(.text) }
+    static var muted: Color { ThemeRuntime.fixedColor(.muted) }
+    static var border: Color { ThemeRuntime.fixedColor(.border) }
 }
 
 private struct CyberpunkGroupBoxStyle: GroupBoxStyle {
@@ -585,16 +579,9 @@ final class PivyModel: ObservableObject {
 
         guard result.status == 0, let summary = Self.formatDeviceSummary(result.stdout) else {
             guard lastDetectedDeviceIdentity != nil,
-                  Self.looksLikeNoDevice(output: output, error: error) else { return }
+                  (Self.looksLikeNoDevice(output: output, error: error) || Self.isEmptyDeviceResponse(result.stdout)) else { return }
 
-            lastDetectedDeviceIdentity = nil
-            deviceSummary = "未检测到 YubiKey"
-            deviceReader = "未检测到 YubiKey"
-            deviceSerial = "--"
-            devicePIVVersion = "--"
-            availableSlots = ["9a", "9c", "9d", "9e"]
-            announce("YubiKey 已移除", kind: .warning)
-            appendLog("自动检测：未检测到 PIV YubiKey。插入设备后将自动重新读取。")
+            clearDetectedDevice()
             return
         }
 
@@ -615,6 +602,18 @@ final class PivyModel: ObservableObject {
         deviceSerial = Self.summaryValue(summary, prefix: "序列号：") ?? "--"
         devicePIVVersion = Self.summaryValue(summary, prefix: "PIV 版本：") ?? "--"
         lastDetectedDeviceIdentity = identity ?? Self.deviceIdentity(from: summary)
+    }
+
+    private func clearDetectedDevice() {
+        guard lastDetectedDeviceIdentity != nil else { return }
+        lastDetectedDeviceIdentity = nil
+        deviceSummary = "未检测到 YubiKey"
+        deviceReader = "未检测到 YubiKey"
+        deviceSerial = "--"
+        devicePIVVersion = "--"
+        availableSlots = ["9a", "9c", "9d", "9e"]
+        announce("YubiKey 已移除", kind: .warning)
+        appendLog("自动检测：未检测到 PIV YubiKey。插入设备后将自动重新读取。")
     }
 
     private func showDevice(attempt: Int) {
@@ -744,6 +743,19 @@ final class PivyModel: ObservableObject {
             "no piv/tokens",
             "not found"
         ].contains(where: text.contains)
+    }
+
+    private static func isEmptyDeviceResponse(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) else { return false }
+        if let array = object as? [Any] {
+            return array.isEmpty
+        }
+        guard let dictionary = object as? [String: Any] else { return false }
+        if let devices = dictionary["devices"] as? [Any] {
+            return devices.isEmpty
+        }
+        let deviceFields: Set<String> = ["reader", "serial", "slots", "ykpiv_version"]
+        return !dictionary.keys.contains(where: deviceFields.contains)
     }
 
     func showVersion() {
