@@ -579,7 +579,9 @@ final class PivyModel: ObservableObject {
 
         guard result.status == 0, let summary = Self.formatDeviceSummary(result.stdout) else {
             guard lastDetectedDeviceIdentity != nil,
-                  (Self.looksLikeNoDevice(output: output, error: error) || Self.isEmptyDeviceResponse(result.stdout)) else { return }
+                  (Self.looksLikeNoDevice(output: output, error: error)
+                   || Self.isEmptyDeviceResponse(result.stdout)
+                   || (result.stdout.isEmpty && result.stderr.isEmpty)) else { return }
 
             clearDetectedDevice()
             return
@@ -2670,24 +2672,15 @@ private struct PageHeader: View {
             }
             Spacer(minLength: 12)
             HStack(spacing: 8) {
-                Picker(selection: $themeRawValue) {
+                Picker("主题", selection: $themeRawValue) {
                     ForEach(AppTheme.allCases) { theme in
                         Text(theme.title).tag(theme.rawValue)
                     }
-                } label: {
-                    Label("主题", systemImage: "paintbrush.fill")
                 }
                 .pickerStyle(.menu)
                 .controlSize(.small)
-                .foregroundStyle(CyberpunkTheme.text)
-                .padding(.horizontal, 8)
-                .frame(minHeight: 28)
-                .background(CyberpunkTheme.surfaceRaised.opacity(0.98))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(CyberpunkTheme.border.opacity(0.92), lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .labelsHidden()
+                .tint(CyberpunkTheme.text)
 
                 HStack(spacing: 7) {
                     Circle()
@@ -2920,8 +2913,8 @@ struct ContentView: View {
                 .padding(.horizontal, 18)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .id(themeRawValue)
         }
+        .id(themeRawValue)
         .frame(minWidth: 1040, minHeight: 760)
         .foregroundStyle(CyberpunkTheme.text)
         .tint(CyberpunkTheme.cyan)
