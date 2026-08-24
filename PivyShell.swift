@@ -4,19 +4,142 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum AppTheme: String, CaseIterable, Identifiable {
+    case cyberpunk
+    case light
+    case dark
+    case system
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .cyberpunk: return "赛博朋克"
+        case .light: return "浅色"
+        case .dark: return "深色"
+        case .system: return "跟随系统"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .cyberpunk, .dark: return .dark
+        case .light: return .light
+        case .system: return nil
+        }
+    }
+}
+
+private enum ThemeRole: String {
+    case background
+    case surface
+    case surfaceRaised
+    case surfaceBright
+    case cyan
+    case violet
+    case magenta
+    case orange
+    case green
+    case text
+    case muted
+    case border
+}
+
+private enum ThemeRuntime {
+    static let defaultsKey = "pivy.theme"
+
+    static func dynamicColor(_ role: ThemeRole) -> Color {
+        Color(
+            nsColor: NSColor(
+                name: NSColor.Name("PivyTheme.\(role.rawValue)"),
+                dynamicProvider: { appearance in
+                    nsColor(role, appearance: appearance)
+                }
+            )
+        )
+    }
+
+    static func nsColor(_ role: ThemeRole, appearance: NSAppearance) -> NSColor {
+        let configuredTheme = AppTheme(
+            rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? AppTheme.cyberpunk.rawValue
+        ) ?? .cyberpunk
+        let effectiveTheme: AppTheme
+        if configuredTheme == .system {
+            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            effectiveTheme = isDark ? .dark : .light
+        } else {
+            effectiveTheme = configuredTheme
+        }
+
+        switch effectiveTheme {
+        case .cyberpunk:
+            switch role {
+            case .background: return rgb(0.018, 0.024, 0.055)
+            case .surface: return rgb(0.045, 0.055, 0.105)
+            case .surfaceRaised: return rgb(0.070, 0.075, 0.145)
+            case .surfaceBright: return rgb(0.100, 0.095, 0.185)
+            case .cyan: return rgb(0.120, 0.900, 1.000)
+            case .violet: return rgb(0.470, 0.300, 1.000)
+            case .magenta: return rgb(1.000, 0.180, 0.660)
+            case .orange: return rgb(1.000, 0.540, 0.180)
+            case .green: return rgb(0.260, 1.000, 0.580)
+            case .text: return rgb(0.910, 0.940, 1.000)
+            case .muted: return rgb(0.570, 0.620, 0.760)
+            case .border: return rgb(0.180, 0.230, 0.430)
+            }
+        case .light:
+            switch role {
+            case .background: return rgb(0.955, 0.965, 0.985)
+            case .surface: return rgb(0.985, 0.988, 0.995)
+            case .surfaceRaised: return rgb(1.000, 1.000, 1.000)
+            case .surfaceBright: return rgb(0.930, 0.945, 0.975)
+            case .cyan: return rgb(0.000, 0.420, 0.820)
+            case .violet: return rgb(0.340, 0.220, 0.720)
+            case .magenta: return rgb(0.780, 0.080, 0.420)
+            case .orange: return rgb(0.820, 0.360, 0.000)
+            case .green: return rgb(0.000, 0.520, 0.220)
+            case .text: return rgb(0.100, 0.120, 0.170)
+            case .muted: return rgb(0.350, 0.390, 0.480)
+            case .border: return rgb(0.700, 0.750, 0.850)
+            }
+        case .dark:
+            switch role {
+            case .background: return rgb(0.095, 0.100, 0.125)
+            case .surface: return rgb(0.135, 0.145, 0.175)
+            case .surfaceRaised: return rgb(0.180, 0.190, 0.225)
+            case .surfaceBright: return rgb(0.230, 0.240, 0.280)
+            case .cyan: return rgb(0.420, 0.700, 1.000)
+            case .violet: return rgb(0.620, 0.480, 1.000)
+            case .magenta: return rgb(1.000, 0.360, 0.700)
+            case .orange: return rgb(1.000, 0.620, 0.260)
+            case .green: return rgb(0.420, 0.920, 0.580)
+            case .text: return rgb(0.940, 0.945, 0.965)
+            case .muted: return rgb(0.650, 0.670, 0.730)
+            case .border: return rgb(0.350, 0.370, 0.450)
+            }
+        case .system:
+            return nsColor(role, appearance: appearance)
+        }
+    }
+
+    private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> NSColor {
+        NSColor(calibratedRed: red, green: green, blue: blue, alpha: 1)
+    }
+}
+
 private enum CyberpunkTheme {
-    static let background = Color(red: 0.018, green: 0.024, blue: 0.055)
-    static let surface = Color(red: 0.045, green: 0.055, blue: 0.105)
-    static let surfaceRaised = Color(red: 0.070, green: 0.075, blue: 0.145)
-    static let surfaceBright = Color(red: 0.100, green: 0.095, blue: 0.185)
-    static let cyan = Color(red: 0.120, green: 0.900, blue: 1.000)
-    static let violet = Color(red: 0.470, green: 0.300, blue: 1.000)
-    static let magenta = Color(red: 1.000, green: 0.180, blue: 0.660)
-    static let orange = Color(red: 1.000, green: 0.540, blue: 0.180)
-    static let green = Color(red: 0.260, green: 1.000, blue: 0.580)
-    static let text = Color(red: 0.910, green: 0.940, blue: 1.000)
-    static let muted = Color(red: 0.570, green: 0.620, blue: 0.760)
-    static let border = Color(red: 0.180, green: 0.230, blue: 0.430)
+    static let background = ThemeRuntime.dynamicColor(.background)
+    static let surface = ThemeRuntime.dynamicColor(.surface)
+    static let surfaceRaised = ThemeRuntime.dynamicColor(.surfaceRaised)
+    static let surfaceBright = ThemeRuntime.dynamicColor(.surfaceBright)
+    static let cyan = ThemeRuntime.dynamicColor(.cyan)
+    static let violet = ThemeRuntime.dynamicColor(.violet)
+    static let magenta = ThemeRuntime.dynamicColor(.magenta)
+    static let orange = ThemeRuntime.dynamicColor(.orange)
+    static let green = ThemeRuntime.dynamicColor(.green)
+    static let text = ThemeRuntime.dynamicColor(.text)
+    static let muted = ThemeRuntime.dynamicColor(.muted)
+    static let border = ThemeRuntime.dynamicColor(.border)
 }
 
 private struct CyberpunkGroupBoxStyle: GroupBoxStyle {
@@ -2242,6 +2365,60 @@ final class PivyModel: ObservableObject {
     }
 }
 
+private struct BottomAnchoredLogView: NSViewRepresentable {
+    let text: String
+    let fontSize: CGFloat
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = true
+
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.usesFindBar = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        scrollView.documentView = textView
+        update(textView: textView, scrollView: scrollView)
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        update(textView: textView, scrollView: scrollView)
+    }
+
+    private func update(textView: NSTextView, scrollView: NSScrollView) {
+        if textView.string != text {
+            textView.string = text
+        }
+        textView.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        let appearance = NSApp?.effectiveAppearance ?? NSAppearance(named: .aqua)!
+        textView.textColor = ThemeRuntime.nsColor(.green, appearance: appearance)
+        textView.backgroundColor = ThemeRuntime.nsColor(.surface, appearance: appearance)
+        scrollView.backgroundColor = ThemeRuntime.nsColor(.surface, appearance: appearance)
+
+        DispatchQueue.main.async {
+            textView.layoutSubtreeIfNeeded()
+            textView.scrollToEndOfDocument(nil)
+        }
+    }
+}
+
 private struct PINPromptView: View {
     @ObservedObject var model: PivyModel
 
@@ -2459,6 +2636,7 @@ private struct SidebarNavigation: View {
 private struct PageHeader: View {
     let tab: AppTab
     @ObservedObject var model: PivyModel
+    @Binding var themeRawValue: String
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -2479,17 +2657,28 @@ private struct PageHeader: View {
                     .truncationMode(.tail)
             }
             Spacer(minLength: 12)
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(model.statusKind.color)
-                    .frame(width: 8, height: 8)
-                Text(model.statusText)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(model.statusKind.color)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+            HStack(spacing: 8) {
+                Picker("主题", selection: $themeRawValue) {
+                    ForEach(AppTheme.allCases) { theme in
+                        Text(theme.title).tag(theme.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .labelsHidden()
+
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(model.statusKind.color)
+                        .frame(width: 8, height: 8)
+                    Text(model.statusText)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(model.statusKind.color)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 8)
             .frame(minHeight: 28)
             .background(model.statusKind.background.overlay(CyberpunkTheme.surfaceRaised))
             .overlay(
@@ -2666,6 +2855,11 @@ struct ContentView: View {
     @State private var isGPGPinentryHelpExpanded = false
     @State private var isGuideFirstUseExpanded = false
     @State private var isLogExpanded = true
+    @AppStorage(ThemeRuntime.defaultsKey) private var themeRawValue = AppTheme.cyberpunk.rawValue
+
+    private var selectedTheme: AppTheme {
+        AppTheme(rawValue: themeRawValue) ?? .cyberpunk
+    }
 
     var body: some View {
         ZStack {
@@ -2679,7 +2873,7 @@ struct ContentView: View {
                     .frame(width: 1)
 
                 VStack(alignment: .leading, spacing: 12) {
-                    PageHeader(tab: selectedTab, model: model)
+                    PageHeader(tab: selectedTab, model: model, themeRawValue: $themeRawValue)
 
                     if selectedTab == .logs {
                         logPage
@@ -2704,11 +2898,12 @@ struct ContentView: View {
                 .padding(.horizontal, 18)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+            .id(themeRawValue)
         }
         .frame(minWidth: 1040, minHeight: 760)
         .foregroundStyle(CyberpunkTheme.text)
         .tint(CyberpunkTheme.cyan)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(selectedTheme.colorScheme)
         .groupBoxStyle(CyberpunkGroupBoxStyle())
         .sheet(isPresented: $model.showPINPrompt) {
             PINPromptView(model: model)
@@ -2734,10 +2929,7 @@ struct ContentView: View {
                 .font(.callout)
                 .foregroundStyle(CyberpunkTheme.muted)
 
-            TextEditor(text: $model.log)
-                .font(.system(size: 12, design: .monospaced))
-                .scrollContentBackground(.hidden)
-                .foregroundStyle(CyberpunkTheme.green)
+            BottomAnchoredLogView(text: model.log, fontSize: 12)
                 .background(CyberpunkTheme.surface)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(CyberpunkTheme.border, lineWidth: 1))
@@ -2800,11 +2992,8 @@ struct ContentView: View {
             }
             .controlSize(.small)
 
-            TextEditor(text: $model.log)
-                .font(.system(size: 11, design: .monospaced))
+            BottomAnchoredLogView(text: model.log, fontSize: 11)
                 .frame(maxWidth: .infinity, minHeight: 180, maxHeight: 180)
-                .scrollContentBackground(.hidden)
-                .foregroundStyle(CyberpunkTheme.green)
                 .background(CyberpunkTheme.surface)
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
@@ -2927,6 +3116,30 @@ struct ContentView: View {
                     .padding(4)
                 }
 
+                GroupBox("GPG 主密钥、子密钥与丢失恢复") {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("主密钥是你的长期身份和管理根；子密钥分别承担签名（S）、加密（E）和认证（A）。日常使用通常只把子密钥放进 YubiKey，主密钥保存在离线加密备份中。")
+                            .font(.callout)
+                        Text("推荐流程：先保存主密钥指纹、公开撤销证书和加密备份 → 创建 S/E/A 子密钥 → 在“GPG 工具 → 密钥与卡片”中生成或迁移到 YubiKey → 导出公钥给别人。")
+                            .font(.caption)
+                        Text("常用检查命令：\ngpg --list-secret-keys --keyid-format LONG\ngpg --edit-key <主密钥指纹>\n# 交互界面中使用 addkey 创建子密钥；选中子密钥后使用 keytocard 迁移到卡片\ngpg --export --armor <主密钥指纹> > public-key.asc")
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(CyberpunkTheme.surface)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(CyberpunkTheme.cyan.opacity(0.30), lineWidth: 1)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        Text("丢失 YubiKey 后：不能从卡片导出私钥；用离线主密钥备份在新卡重新生成/迁移子密钥，并发布旧子密钥的撤销信息。多张备用卡建议使用不同子密钥；复制同一套子密钥更方便，但必须承担更高的备份和泄露风险。")
+                            .font(.caption)
+                            .foregroundStyle(CyberpunkTheme.orange)
+                    }
+                    .padding(4)
+                }
+
                 GroupBox("读卡冲突处理") {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("如果读取 PIV 时提示“没有返回有效 JSON”，程序会自动释放 GPG 的 scdaemon 并重试一次。仍然失败时，先关闭其他智能卡程序，再点击下面的按钮。")
@@ -2975,7 +3188,7 @@ struct ContentView: View {
 
                     if isGuideFirstUseExpanded {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("1. 插入 YubiKey，在“设备”页点击“读取设备”。")
+                            Text("1. 插入或更换 YubiKey，等待左上角自动读取；如果读卡程序被占用，再点“读取设备”。")
                             Text("2. 需要 PIV 签名、加密或 CSR 时，选择对应菜单并按提示输入 PIV PIN。")
                             Text("3. 需要 GPG 时，进入“GPG 工具 → 密钥与卡片”，读取 OpenPGP 卡或生成卡上密钥。")
                             Text("4. 给别人发密文：先导入对方公钥，核对指纹，再到“文件加密”选择对方公钥。")
