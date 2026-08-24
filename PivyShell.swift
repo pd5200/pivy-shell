@@ -2672,15 +2672,16 @@ private struct PageHeader: View {
             }
             Spacer(minLength: 12)
             HStack(spacing: 8) {
-                Picker("主题", selection: $themeRawValue) {
+                Picker(selection: $themeRawValue) {
                     ForEach(AppTheme.allCases) { theme in
                         Text(theme.title).tag(theme.rawValue)
                     }
+                } label: {
+                    Text(AppTheme(rawValue: themeRawValue)?.title ?? "主题")
+                        .foregroundStyle(CyberpunkTheme.text)
                 }
                 .pickerStyle(.menu)
                 .controlSize(.small)
-                .labelsHidden()
-                .foregroundStyle(CyberpunkTheme.text)
                 .tint(CyberpunkTheme.text)
 
                 HStack(spacing: 7) {
