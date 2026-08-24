@@ -273,6 +273,7 @@ private enum PendingOperation {
 private enum GPGSection: String, CaseIterable, Hashable {
     case overview
     case keys
+    case generate
     case encrypt
     case sign
     case publish
@@ -281,6 +282,7 @@ private enum GPGSection: String, CaseIterable, Hashable {
         switch self {
         case .overview: return "概览"
         case .keys: return "密钥与卡片"
+        case .generate: return "本地生成"
         case .encrypt: return "文件加密"
         case .sign: return "签名验证"
         case .publish: return "公布公钥"
@@ -291,6 +293,7 @@ private enum GPGSection: String, CaseIterable, Hashable {
         switch self {
         case .overview: return "rectangle.grid.2x2"
         case .keys: return "key.fill"
+        case .generate: return "key.viewfinder"
         case .encrypt: return "lock.fill"
         case .sign: return "signature"
         case .publish: return "person.crop.circle.badge.checkmark"
@@ -1078,6 +1081,100 @@ final class PivyModel: ObservableObject {
         }
     }
 
+    func openLocalGPGKeyGenerationWizard() {
+        guard let gpgToolPath else {
+            announce("找不到 GPG，无法生成本地密钥", kind: .failure)
+            appendLog("请先安装 GnuPG：brew install gnupg")
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "准备在本地生成 GPG 主密钥和子密钥？"
+        alert.informativeText = "建议先拔出 YubiKey，并在离线、受保护的环境中操作。生成后必须保存加密的私钥备份、主密钥指纹、撤销证书和公钥。此向导不会自动导出私钥，也不会自动写入 YubiKey。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "打开本地生成向导")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            announce("已取消本地密钥生成", kind: .info)
+            return
+        }
+
+        let commandFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pivy-gpg-local-key-generation-\(UUID().uuidString).command")
+        let shellGPGPath = gpgToolPath.replacingOccurrences(of: "'", with: "'\\''")
+        let terminalScript = """
+        #!/bin/zsh
+        clear
+        echo "Pivy GPG 本地密钥生成向导"
+        echo ""
+        echo "安全建议：先拔出 YubiKey；尽量断网；在受保护的离线环境完成主密钥生成。"
+        echo "本向导不会自动把私钥导入 YubiKey，也不会执行 factory-reset。"
+        echo ""
+        echo "第一步：生成主密钥（选择 Sign/Certify 能力）。"
+        echo "完成后按回车继续。"
+        read -r "reply?按回车执行 gpg --full-generate-key，或按 Ctrl-C 取消："
+        '\(shellGPGPath)' --full-generate-key
+        if [[ $? -ne 0 ]]; then
+            echo "主密钥生成失败或已取消。"
+            read -k 1 "reply?按任意键关闭此窗口..."
+            rm -f -- "$0"
+            exit 1
+        fi
+
+        echo ""
+        echo "第二步：查看主密钥和子密钥。"
+        '\(shellGPGPath)' --list-secret-keys --keyid-format long
+        echo ""
+        echo "输入主密钥的完整指纹，进入子密钥管理："
+        read -r "fingerprint?主密钥指纹："
+        if [[ -z "$fingerprint" ]]; then
+            echo "未输入指纹，已停止；请稍后手动执行 gpg --edit-key。"
+            read -k 1 "reply?按任意键关闭此窗口..."
+            rm -f -- "$0"
+            exit 0
+        fi
+
+        echo ""
+        echo "第三步：在 gpg> 中依次执行 addkey，创建："
+        echo "  1) Signature：签名/Git"
+        echo "  2) Encryption：文件解密"
+        echo "  3) Authentication：SSH 或其他认证"
+        echo "完成后输入 save。"
+        '\(shellGPGPath)' --edit-key "$fingerprint"
+
+        echo ""
+        echo "第四步：生成后必须保存以下内容："
+        echo "  - 加密的主密钥/子密钥离线备份"
+        echo "  - 主密钥指纹和撤销证书"
+        echo "  - ASCII-armored 公钥"
+        echo ""
+        echo "可复制到安全位置后执行的命令："
+        echo "  \(shellGPGPath) --armor --export $fingerprint > public-key.asc"
+        echo "  \(shellGPGPath) --gen-revoke $fingerprint > revoke-certificate.asc"
+        echo ""
+        echo "完成后回到 Pivy，在“本地生成”页阅读迁移说明，再把子密钥导入 YubiKey。"
+        read -k 1 "reply?按任意键关闭此窗口..."
+        rm -f -- "$0"
+        """
+
+        do {
+            try terminalScript.write(to: commandFile, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o700))],
+                ofItemAtPath: commandFile.path
+            )
+            let openProcess = Process()
+            openProcess.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            openProcess.arguments = ["-a", "Terminal", commandFile.path]
+            try openProcess.run()
+            announce("已打开本地 GPG 密钥生成向导", kind: .info)
+            appendLog("本地生成向导已打开：请离线生成、加密备份主密钥和子密钥，再回到“本地生成”页迁移到 YubiKey。")
+        } catch {
+            announce("无法打开本地生成向导", kind: .failure)
+            appendLog("请手动执行：gpg --full-generate-key\n\(error.localizedDescription)")
+        }
+    }
+
     func openGPGCardKeyWizard(replace: Bool) {
         guard gpgToolPath != nil else {
             announce("找不到 GPG，无法打开密钥向导", kind: .failure)
@@ -1277,6 +1374,22 @@ final class PivyModel: ObservableObject {
         appendLog(instructions)
     }
 
+    func copyGPGLocalGenerationSteps() {
+        let instructions = gpgLocalGenerationInstructions
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(instructions, forType: .string)
+        announce("本地密钥生成步骤已复制", kind: .success)
+        appendLog(instructions)
+    }
+
+    func copyGPGSubkeyMigrationSteps() {
+        let instructions = gpgSubkeyMigrationInstructions
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(instructions, forType: .string)
+        announce("YubiKey 子密钥迁移步骤已复制", kind: .success)
+        appendLog(instructions)
+    }
+
     func copyGPGPinentryRepairSteps() {
         let instructions = gpgPinentryRepairInstructions
         NSPasteboard.general.clearContents()
@@ -1347,6 +1460,65 @@ final class PivyModel: ObservableObject {
 
         # 备份与丢卡准备
         # 保存主密钥撤销证书、主密钥指纹和每张卡的序列号；不要提交到 GitHub。
+        """
+    }
+
+    private var gpgLocalGenerationInstructions: String {
+        """
+        # 本地生成 GPG 主密钥和子密钥
+        # 建议：拔出 YubiKey、断网，在受保护的离线环境中执行
+        gpg --full-generate-key
+
+        # 查看主密钥和现有子密钥，记录完整指纹
+        gpg --list-secret-keys --keyid-format long
+
+        # 创建子密钥；在 gpg> 中按顺序执行 addkey
+        gpg --edit-key YOUR_PRIMARY_FINGERPRINT
+        # addkey → Signature：签名/Git
+        # addkey → Encryption：文件解密
+        # addkey → Authentication：SSH 或其他认证
+        # 完成后输入 save
+
+        # 导出公钥（可以公开，不包含私钥）
+        gpg --armor --export YOUR_PRIMARY_FINGERPRINT > public-key.asc
+
+        # 生成撤销证书并离线保存
+        gpg --gen-revoke YOUR_PRIMARY_FINGERPRINT > revoke-certificate.asc
+
+        # 加密备份主密钥和子密钥；输出文件必须放到离线安全介质
+        umask 077
+        gpg --export-secret-keys --armor YOUR_PRIMARY_FINGERPRINT | gpg --symmetric --cipher-algo AES256 --output gpg-secret-backup.asc.gpg
+
+        # 备份清单：加密私钥备份、撤销证书、主密钥指纹、公钥、备用介质
+        # 不要把私钥备份、PIN 或管理密钥提交到 GitHub。
+        """
+    }
+
+    private var gpgSubkeyMigrationInstructions: String {
+        """
+        # 将本地 GPG 子密钥迁移到 YubiKey OpenPGP 应用
+        # 第 0 步：确认已经完成加密离线备份，并插入目标 YubiKey
+        gpg --list-secret-keys --keyid-format long
+
+        # 第 1 步：打开主密钥编辑器
+        gpg --edit-key YOUR_PRIMARY_FINGERPRINT
+
+        # 第 2 步：在 gpg> 中查看 key N 编号
+        # 选择签名子密钥后执行：
+        # key N
+        # keytocard
+        # 选择 Signature
+
+        # 选择加密子密钥后再次执行：
+        # key N
+        # keytocard
+        # 选择 Encryption
+
+        # 如需认证子密钥，再执行一次 key N → keytocard → Authentication
+        # 最后输入 save
+
+        # 回到 Pivy：读取 OpenPGP 卡 → 读取本机公钥 → 读取密钥结构
+        # 只导入公钥不能恢复私钥；不要执行 factory-reset 或 ykman piv reset。
         """
     }
 
@@ -3525,6 +3697,8 @@ struct ContentView: View {
             gpgOverviewContent
         case .keys:
             gpgKeysContent
+        case .generate:
+            gpgGenerateContent
         case .encrypt:
             gpgEncryptContent
         case .sign:
@@ -3579,6 +3753,7 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                     HStack(spacing: 8) {
                         Button("密钥与卡片") { selectedGPGSection = .keys }
+                        Button("本地生成") { selectedGPGSection = .generate }
                         Button("文件加密") { selectedGPGSection = .encrypt }
                         Button("签名验证") { selectedGPGSection = .sign }
                         Button("公布公钥") { selectedGPGSection = .publish }
@@ -3789,6 +3964,114 @@ struct ContentView: View {
             Text("注意：YubiKey OpenPGP 私钥通常不能导出。更换前请保留旧公钥、主密钥指纹、撤销证书和备用卡方案；这不会重置 PIV 9a/9c/9d/9e。")
                 .font(.caption)
                 .foregroundStyle(.orange)
+        }
+    }
+
+    private var gpgGenerateContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            GroupBox("本地生成：建议离线操作") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Button("打开本地生成向导") { model.openLocalGPGKeyGenerationWizard() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(model.busy)
+                        Button("复制生成步骤") { model.copyGPGLocalGenerationSteps() }
+                    }
+                    Label("建议先拔出 YubiKey、尽量断网，并在受保护的离线环境生成主密钥。", systemImage: "wifi.slash")
+                        .foregroundStyle(CyberpunkTheme.orange)
+                    Text("向导会打开 Terminal，让 GnuPG 自己处理姓名、邮箱、密码和随机数。Pivy 不会代替你输入密码，也不会自动导出私钥。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("主密钥用于确认身份和管理子密钥；日常使用的签名、加密、认证功能应分别使用 S/E/A 子密钥。")
+                        .font(.callout)
+                }
+                .padding(4)
+            }
+
+            GroupBox("生成顺序") {
+                VStack(alignment: .leading, spacing: 8) {
+                    generationStep(number: "1", title: "生成主密钥", detail: "执行 gpg --full-generate-key，主密钥只负责身份和管理。")
+                    generationStep(number: "2", title: "创建子密钥", detail: "进入 gpg --edit-key，在 gpg> 中用 addkey 创建 Signature、Encryption、Authentication。")
+                    generationStep(number: "3", title: "保存恢复材料", detail: "加密保存主密钥/子密钥备份、撤销证书、公钥和完整指纹。")
+                    generationStep(number: "4", title: "迁移到 YubiKey", detail: "使用 keytocard 把子密钥放入 YubiKey；主密钥继续留在离线备份中。")
+                    Text("不要把生成出来的私钥备份、PIN 或管理密钥放进 GitHub、网盘明文目录或截图。")
+                        .font(.caption)
+                        .foregroundStyle(CyberpunkTheme.orange)
+                }
+                .padding(4)
+            }
+
+            GroupBox("必须保存的内容") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("加密的主密钥/子密钥备份", systemImage: "externaldrive.badge.lock")
+                    Label("主密钥完整指纹和撤销证书", systemImage: "checkmark.seal")
+                    Label("ASCII-armored 公钥", systemImage: "person.crop.circle.badge.checkmark")
+                    Label("每张 YubiKey 的序列号和用途记录", systemImage: "list.number")
+                    Text("公钥可以公开；私钥备份必须离线加密保存。公钥不能恢复丢失的私钥，也不能单独制作备用 YubiKey。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(4)
+            }
+
+            GroupBox("迁移子密钥到 YubiKey") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("这里的“导入”不是导入公钥，而是把本地生成的私钥子密钥迁移到 YubiKey OpenPGP 应用。只导入 public-key.asc 只能验证签名或给别人加密，不能让卡片替你签名或解密。")
+                        .font(.callout)
+                    HStack(spacing: 8) {
+                        Button("打开子密钥迁移向导") { model.openGPGExistingKeyMigrationWizard() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(model.busy)
+                        Button("复制迁移步骤") { model.copyGPGSubkeyMigrationSteps() }
+                        Button("读取密钥结构") { model.refreshGPGKeyDetails() }
+                            .disabled(model.busy)
+                    }
+                    Text("gpg --edit-key <主密钥指纹>\n# gpg> 中：key N → keytocard → 选择 Signature / Encryption / Authentication\n# 完成后：save")
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(CyberpunkTheme.surface)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(CyberpunkTheme.cyan.opacity(0.30), lineWidth: 1)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    Text("迁移前必须完成备份。迁移后主密钥仍应留在离线环境；YubiKey 主要保存 S/E/A 子密钥。")
+                        .font(.caption)
+                        .foregroundStyle(CyberpunkTheme.orange)
+                }
+                .padding(4)
+            }
+
+            GroupBox("两个方案怎么选") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("直接在 YubiKey 上生成：私钥从生成时就留在卡内，安全性高，但必须准备备用卡或接受卡片丢失后的恢复限制。")
+                    Text("本地生成后迁移：主密钥和备份由你离线管理，可以为多张备用卡生成/迁移子密钥，更适合长期使用和密钥轮换。")
+                    Text("如果只是学习或演示，建议先使用测试邮箱和测试密钥；正式身份不要在联网的日常电脑上随意生成。")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(4)
+            }
+        }
+        .padding(4)
+    }
+
+    private func generationStep(number: String, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(number)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(CyberpunkTheme.background)
+                .frame(width: 22, height: 22)
+                .background(CyberpunkTheme.cyan)
+                .clipShape(Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.callout.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
