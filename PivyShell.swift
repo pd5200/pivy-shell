@@ -3801,45 +3801,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 4) {
                 ForEach(GPGSection.allCases, id: \.self) { section in
-                    Button {
-                        selectedGPGSection = section
-                    } label: {
-                        ZStack {
-                            Color.clear
-                            Label(section.title, systemImage: section.systemImage)
-                                .font(.callout.weight(selectedGPGSection == section ? .semibold : .regular))
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 32)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .frame(maxWidth: .infinity, minHeight: 32)
-                    .contentShape(Rectangle())
-                    .foregroundStyle(selectedGPGSection == section ? CyberpunkTheme.cyan : CyberpunkTheme.text)
-                    .background(
-                        selectedGPGSection == section
-                            ? CyberpunkTheme.cyan.opacity(0.15)
-                            : hoveredGPGSection == section
-                                ? CyberpunkTheme.violet.opacity(0.14)
-                                : CyberpunkTheme.surface.opacity(0.40)
-                    )
-                    .overlay(alignment: .bottom) {
-                        Capsule()
-                            .fill(selectedGPGSection == section ? CyberpunkTheme.magenta : .clear)
-                            .frame(height: 2)
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 2)
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
-                    .onHover { isHovering in
-                        hoveredGPGSection = isHovering ? section : nil
-                        if isHovering {
-                            NSCursor.pointingHand.set()
-                        } else {
-                            NSCursor.arrow.set()
-                        }
-                    }
-                    .help(section.title)
+                    gpgSectionButton(section)
                 }
             }
             .padding(4)
@@ -3857,6 +3819,51 @@ struct ContentView: View {
                     .padding(4)
             }
         }
+    }
+
+    private func gpgSectionButton(_ section: GPGSection) -> some View {
+        let isSelected = selectedGPGSection == section
+        return Button {
+            selectedGPGSection = section
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: section.systemImage)
+                Text(section.title)
+                Spacer(minLength: 0)
+            }
+            .font(.callout)
+            .fontWeight(isSelected ? .semibold : .regular)
+            .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32)
+        .contentShape(Rectangle())
+        .foregroundStyle(isSelected ? CyberpunkTheme.cyan : CyberpunkTheme.text)
+        .background(
+            isSelected
+                ? CyberpunkTheme.cyan.opacity(0.15)
+                : hoveredGPGSection == section
+                    ? CyberpunkTheme.violet.opacity(0.14)
+                    : CyberpunkTheme.surface.opacity(0.40)
+        )
+        .overlay(alignment: .bottom) {
+            Capsule()
+                .fill(isSelected ? CyberpunkTheme.magenta : .clear)
+                .frame(height: 2)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 2)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .onHover { isHovering in
+            hoveredGPGSection = isHovering ? section : nil
+            if isHovering {
+                NSCursor.pointingHand.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+        }
+        .help(section.title)
     }
 
     @ViewBuilder
