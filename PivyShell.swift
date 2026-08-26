@@ -276,7 +276,6 @@ private enum GPGSection: String, CaseIterable, Hashable {
     case generate
     case encrypt
     case sign
-    case downloadVerify
     case publish
 
     var title: String {
@@ -286,7 +285,6 @@ private enum GPGSection: String, CaseIterable, Hashable {
         case .generate: return "本地生成"
         case .encrypt: return "文件加密"
         case .sign: return "签名验证"
-        case .downloadVerify: return "下载验证"
         case .publish: return "公布公钥"
         }
     }
@@ -298,7 +296,6 @@ private enum GPGSection: String, CaseIterable, Hashable {
         case .generate: return "key.viewfinder"
         case .encrypt: return "lock.fill"
         case .sign: return "signature"
-        case .downloadVerify: return "checkmark.shield"
         case .publish: return "person.crop.circle.badge.checkmark"
         }
     }
@@ -316,11 +313,8 @@ final class PivyModel: ObservableObject {
     @Published var gpgSignFile: URL?
     @Published var gpgVerifyFile: URL?
     @Published var gpgVerifySignatureFile: URL?
-    @Published var veraCryptOriginalFile: URL?
-    @Published var veraCryptSignatureFile: URL?
-    @Published var veraCryptKeyFingerprint = ""
-    @Published var veraCryptKeyStatus = "尚未下载并校验 VeraCrypt 官方公钥"
-    @Published var veraCryptKeyImported = false
+    @Published var gpgKeyLookup = ""
+    @Published var gpgSelectedPublicKey = ""
     @Published var gpgRecipient = ""
     @Published var gpgEncryptRecipient = ""
     @Published var gpgKeys: [GPGKey] = []
@@ -943,7 +937,7 @@ final class PivyModel: ObservableObject {
         requestPIN(for: .decrypt, title: "9d 文件解密")
     }
 
-    func refreshGPGKeys() {
+    func refreshGPGKeys(allowRemoteFallback: Bool = true) {
         guard gpgToolPath != nil else {
             announce("找不到 GPG", kind: .failure)
             appendLog("未找到 gpg。macOS 可安装：brew install gnupg")
@@ -986,6 +980,134 @@ final class PivyModel: ObservableObject {
                 if secretResult.status != 0 {
                     self.appendLog("读取私钥索引失败：\n\(Self.text(secretResult.stderr))")
                 }
+
+                let query = self.gpgKeyLookup.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !query.isEmpty else { return }
+                let candidates = keys.map {
+                    GPGKeyLookupCandidate(fingerprint: $0.fingerprint, userID: $0.userID)
+                }
+                if let localKey = GPGKeyLookupLogic.localMatch(query: query, candidates: candidates) {
+                    self.gpgSelectedPublicKey = localKey.fingerprint
+                    self.gpgEncryptRecipient = localKey.fingerprint
+                    self.gpgKeyLookup = localKey.fingerprint
+                    let displayName = localKey.userID.isEmpty
+                        ? localKey.fingerprint
+                        : "\(localKey.userID) · \(localKey.fingerprint)"
+                    self.announce("本地公钥库已找到：\(displayName)", kind: .success)
+                    self.appendLog("未访问网络；已将本地公钥用于后续加密和签名验证。")
+                } else if allowRemoteFallback {
+                    self.appendLog("本地公钥库未找到：\(query)")
+                    self.fetchGPGKeyFromNetwork(query: query)
+                } else {
+                    self.announce("读取完成，但公钥库中没有：\(query)", kind: .failure)
+                    self.appendLog("网络查询没有导入可匹配的公钥；请核对邮箱、完整指纹和密钥服务器。")
+                    self.showGPGAlert(
+                        title: "没有找到匹配的公钥",
+                        message: "本机和网络公钥服务都没有找到：\(query)\n\n请检查邮箱、完整指纹或公钥服务器设置，也可以直接导入 .asc 公钥文件。"
+                    )
+                }
+            }
+        }
+    }
+
+    private func fetchGPGKeyFromNetwork(query: String) {
+        let keyserver = gpgKeyserver.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !keyserver.isEmpty else {
+            announce("未设置 GPG 公钥服务器", kind: .failure)
+            appendLog("请在“公布公钥”页设置 hkps://keys.openpgp.org，或先导入 .asc 公钥文件。")
+            showGPGAlert(
+                title: "未设置公钥服务器",
+                message: "请先在“公布公钥”页设置公钥服务器，或直接导入 ASCII-armored 公钥文件。"
+            )
+            return
+        }
+
+        let arguments = GPGKeyLookupLogic.remoteArguments(query: query, keyserver: keyserver)
+        announce("本地未找到，正在从 GPG 公钥服务查询…", kind: .running)
+        appendLog("查询服务器：\(keyserver)")
+        appendLog("邮箱查询会尝试 WKD/keyserver；完整 40 位指纹使用 recv-keys。网络公钥仍需人工核对指纹。")
+        runGPG(arguments: arguments, operation: "从网络查询 GPG 公钥") { [weak self] result in
+            guard let self else { return }
+            if result.status == 0 {
+                self.appendLog(Self.text(result.stdout))
+                self.refreshGPGKeys(allowRemoteFallback: false)
+            } else {
+                self.announce("网络查询 GPG 公钥失败", kind: .failure)
+                let detail = Self.text(result.stderr)
+                self.appendLog(detail)
+                self.showGPGAlert(
+                    title: "网络查询公钥失败",
+                    message: detail == "（无输出）" ? "GPG 没有返回错误详情。" : detail
+                )
+            }
+        }
+    }
+
+    private func showGPGAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "知道了")
+        alert.runModal()
+    }
+
+    func deleteSelectedGPGPublicKey() {
+        let selectedFingerprint = gpgSelectedPublicKey.isEmpty
+            ? GPGVerificationLogic.normalizeFingerprint(gpgKeyLookup)
+            : GPGVerificationLogic.normalizeFingerprint(gpgSelectedPublicKey)
+        guard selectedFingerprint.count == 40 else {
+            announce("请先在公钥库中选择要删除的公钥", kind: .warning)
+            return
+        }
+        guard !gpgSecretKeys.contains(where: {
+            GPGVerificationLogic.fingerprintMatches(
+                expected: selectedFingerprint,
+                actual: $0.fingerprint
+            )
+        }) else {
+            announce("该身份有对应私钥，未删除公钥", kind: .failure)
+            appendLog("为避免误删私钥，本工具只删除没有对应私钥的公钥；请先确认是否要删除整个 GPG 身份。")
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "从本机公钥库删除？"
+        alert.informativeText = "将删除指纹为 \(selectedFingerprint) 的公开密钥。不会删除 YubiKey、PIV 槽位或其他密钥服务器上的副本。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "删除公钥")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            announce("已取消删除公钥", kind: .info)
+            return
+        }
+
+        runGPG(
+            arguments: ["--batch", "--yes", "--delete-key", selectedFingerprint],
+            operation: "删除本机 GPG 公钥"
+        ) { [weak self] result in
+            guard let self else { return }
+            if result.status == 0 {
+                self.gpgKeys.removeAll {
+                    GPGVerificationLogic.fingerprintMatches(
+                        expected: selectedFingerprint,
+                        actual: $0.fingerprint
+                    )
+                }
+                if GPGVerificationLogic.fingerprintMatches(expected: selectedFingerprint, actual: self.gpgSelectedPublicKey) {
+                    self.gpgSelectedPublicKey = ""
+                }
+                if GPGVerificationLogic.fingerprintMatches(expected: selectedFingerprint, actual: self.gpgKeyLookup) {
+                    self.gpgKeyLookup = ""
+                }
+                if GPGVerificationLogic.fingerprintMatches(expected: selectedFingerprint, actual: self.gpgEncryptRecipient) {
+                    self.gpgEncryptRecipient = ""
+                }
+                self.announce("本机 GPG 公钥已删除", kind: .success)
+                self.appendLog("已删除：\(selectedFingerprint)")
+            } else {
+                self.announce("删除 GPG 公钥失败", kind: .failure)
+                self.appendLog(Self.text(result.stderr))
             }
         }
     }
@@ -1085,210 +1207,6 @@ final class PivyModel: ObservableObject {
                     announce("GPG 公钥导入失败", kind: .failure)
                     appendLog(Self.text(result.stderr))
                 }
-            }
-        }
-    }
-
-    func chooseVeraCryptOriginalFile() {
-        chooseFile(title: "选择 VeraCrypt 原文件") { [weak self] url in
-            guard let self, let url else { return }
-            setVeraCryptOriginalFile(url)
-        }
-    }
-
-    func chooseVeraCryptSignatureFile() {
-        chooseFile(title: "选择 VeraCrypt .sig 签名") { [weak self] url in
-            guard let self, let url else { return }
-            setVeraCryptSignatureFile(url)
-        }
-    }
-
-    func setVeraCryptOriginalFile(_ url: URL) {
-        let extensionName = url.pathExtension.lowercased()
-        if extensionName == "sig" || extensionName == "asc" {
-            announce("这个文件看起来是签名文件，请放入右侧 .sig 区域", kind: .warning)
-            setVeraCryptSignatureFile(url)
-            return
-        }
-        veraCryptOriginalFile = url
-        announce("已载入 VeraCrypt 原文件：\(url.lastPathComponent)", kind: .info)
-    }
-
-    func setVeraCryptSignatureFile(_ url: URL) {
-        let extensionName = url.pathExtension.lowercased()
-        guard extensionName == "sig" || extensionName == "asc" else {
-            announce("VeraCrypt 签名文件通常是 .sig 或 .asc", kind: .warning)
-            return
-        }
-        veraCryptSignatureFile = url
-        announce("已载入 VeraCrypt 签名：\(url.lastPathComponent)", kind: .info)
-    }
-
-    func openVeraCryptDownloadPage() {
-        NSWorkspace.shared.open(GPGVerificationLogic.veraCryptDownloadURL)
-        announce("已打开 VeraCrypt 官方下载页", kind: .info)
-        appendLog("下载页会同时提供原文件、.sig 签名和官方公钥指纹；请只从官方页面获取文件。")
-    }
-
-    func downloadAndImportVeraCryptKey() {
-        guard gpgToolPath != nil else {
-            announce("找不到 GPG，无法校验 VeraCrypt 公钥", kind: .failure)
-            appendLog("请先安装 GnuPG：brew install gnupg")
-            return
-        }
-        guard !busy else {
-            announce("已有操作正在运行，请稍候", kind: .warning)
-            return
-        }
-
-        busy = true
-        veraCryptKeyImported = false
-        veraCryptKeyFingerprint = ""
-        veraCryptKeyStatus = "正在下载并校验官方公钥…"
-        announce("正在下载 VeraCrypt 官方公钥…", kind: .running)
-        appendLog("公钥地址：\(GPGVerificationLogic.veraCryptPublicKeyURL.absoluteString)")
-        appendLog("期望指纹：\(GPGVerificationLogic.veraCryptFingerprint)")
-
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let (data, response) = try await URLSession.shared.data(from: GPGVerificationLogic.veraCryptPublicKeyURL)
-                if let httpResponse = response as? HTTPURLResponse,
-                   !(200..<300).contains(httpResponse.statusCode) {
-                    throw NSError(
-                        domain: "PivyVeraCrypt",
-                        code: httpResponse.statusCode,
-                        userInfo: [NSLocalizedDescriptionKey: "HTTP \(httpResponse.statusCode)"]
-                    )
-                }
-                guard !data.isEmpty else {
-                    throw NSError(
-                        domain: "PivyVeraCrypt",
-                        code: 1,
-                        userInfo: [NSLocalizedDescriptionKey: "下载内容为空"]
-                    )
-                }
-
-                let temporaryURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("pivy-veracrypt-public-\(UUID().uuidString).asc")
-                try data.write(to: temporaryURL, options: .atomic)
-                self.busy = false
-                let byteCount = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
-                self.appendLog("已下载公钥文件（\(byteCount)），先在隔离预览模式读取指纹。")
-                self.inspectAndImportVeraCryptKey(from: temporaryURL)
-            } catch {
-                self.busy = false
-                self.veraCryptKeyStatus = "下载失败：\(error.localizedDescription)"
-                self.announce("下载 VeraCrypt 官方公钥失败", kind: .failure)
-                self.appendLog(error.localizedDescription)
-            }
-        }
-    }
-
-    private func inspectAndImportVeraCryptKey(from temporaryURL: URL) {
-        runGPG(
-            arguments: [
-                "--batch", "--with-colons",
-                "--import-options", "show-only",
-                "--import", temporaryURL.path
-            ],
-            operation: "校验 VeraCrypt 官方公钥"
-        ) { [weak self] previewResult in
-            guard let self else {
-                try? FileManager.default.removeItem(at: temporaryURL)
-                return
-            }
-
-            let previewOutput = Self.text(previewResult.stdout)
-            let fingerprints = GPGVerificationLogic.importedFingerprints(from: previewOutput)
-            let fingerprintText = fingerprints.isEmpty ? "（未读到指纹）" : fingerprints.joined(separator: ", ")
-            self.appendLog("下载公钥中的指纹：\(fingerprintText)")
-
-            guard previewResult.status == 0,
-                  fingerprints.contains(where: {
-                      GPGVerificationLogic.fingerprintMatches(
-                          expected: GPGVerificationLogic.veraCryptFingerprint,
-                          actual: $0
-                      )
-                  }) else {
-                self.veraCryptKeyStatus = "指纹不匹配，已拒绝导入"
-                self.announce("VeraCrypt 公钥指纹不匹配，已拒绝导入", kind: .failure)
-                self.appendLog("安全规则：只有完全匹配 \(GPGVerificationLogic.veraCryptFingerprint) 才会导入。")
-                try? FileManager.default.removeItem(at: temporaryURL)
-                return
-            }
-
-            self.veraCryptKeyFingerprint = GPGVerificationLogic.veraCryptFingerprint
-            self.veraCryptKeyStatus = "指纹已匹配，正在导入本机 GPG 公钥库…"
-            self.runGPG(
-                arguments: ["--batch", "--import", temporaryURL.path],
-                operation: "导入 VeraCrypt 官方公钥"
-            ) { [weak self] importResult in
-                guard let self else {
-                    try? FileManager.default.removeItem(at: temporaryURL)
-                    return
-                }
-                try? FileManager.default.removeItem(at: temporaryURL)
-                if importResult.status == 0 {
-                    self.veraCryptKeyImported = true
-                    self.veraCryptKeyStatus = "已校验并导入：\(GPGVerificationLogic.veraCryptFingerprint)"
-                    self.announce("VeraCrypt 官方公钥已校验并导入", kind: .success)
-                    self.appendLog("以后验证 VeraCrypt 文件时，程序仍会检查签名中的实际签名者指纹，不只看本机是否有同名公钥。")
-                    self.refreshGPGKeys()
-                } else {
-                    self.veraCryptKeyStatus = "指纹匹配，但导入失败"
-                    self.announce("VeraCrypt 公钥导入失败", kind: .failure)
-                    self.appendLog(Self.text(importResult.stderr))
-                }
-            }
-        }
-    }
-
-    func requestVeraCryptVerify() {
-        guard veraCryptKeyImported else {
-            announce("请先下载并校验 VeraCrypt 官方公钥", kind: .warning)
-            return
-        }
-        guard let originalFile = veraCryptOriginalFile,
-              let signatureFile = veraCryptSignatureFile else {
-            announce("验证 VeraCrypt 需要原文件和 .sig 签名文件", kind: .warning)
-            return
-        }
-        guard validateGPGFile(originalFile, operation: "验证 VeraCrypt 签名"),
-              validateGPGFile(signatureFile, operation: "验证 VeraCrypt 签名") else {
-            return
-        }
-
-        runGPG(
-            arguments: ["--batch", "--status-fd", "1", "--verify", signatureFile.path, originalFile.path],
-            operation: "验证 VeraCrypt GPG 签名"
-        ) { [weak self] result in
-            guard let self else { return }
-            let statusOutput = Self.text(result.stdout)
-            let humanOutput = Self.text(result.stderr)
-            let verdict = GPGVerificationLogic.verdict(
-                exitStatus: Int(result.status),
-                statusOutput: statusOutput,
-                expectedFingerprint: GPGVerificationLogic.veraCryptFingerprint
-            )
-
-            switch verdict {
-            case let .verified(signingFingerprint, primaryFingerprint):
-                self.announce("VeraCrypt 签名验证成功，官方指纹匹配", kind: .success)
-                self.appendLog("官方主密钥指纹：\(primaryFingerprint ?? "未提供")")
-                self.appendLog("实际签名指纹：\(signingFingerprint)")
-                self.appendLog(humanOutput == "（无输出）" ? "原文件与 .sig 签名匹配。" : humanOutput)
-            case let .signatureValidWrongKey(signingFingerprint, primaryFingerprint):
-                self.announce("签名数学上有效，但不是 VeraCrypt 官方密钥", kind: .failure)
-                self.appendLog("实际签名指纹：\(signingFingerprint)")
-                self.appendLog("实际主密钥指纹：\(primaryFingerprint ?? "未提供")")
-                self.appendLog("期望官方指纹：\(GPGVerificationLogic.veraCryptFingerprint)")
-            case .invalidSignature:
-                self.announce("VeraCrypt 签名无效或文件不匹配", kind: .failure)
-                self.appendLog(humanOutput == "（无输出）" ? statusOutput : humanOutput)
-            case .missingFingerprint:
-                self.announce("无法读取签名者指纹，拒绝判定为官方文件", kind: .failure)
-                self.appendLog(humanOutput == "（无输出）" ? statusOutput : humanOutput)
             }
         }
     }
@@ -1934,13 +1852,48 @@ final class PivyModel: ObservableObject {
             operation: "GPG 验证签名"
         ) { [weak self] result in
             guard let self else { return }
+            let statusOutput = Self.text(result.stdout)
             let detail = Self.text(result.stderr)
-            if result.status == 0 {
+            let selectedFingerprint = [
+                self.gpgSelectedPublicKey,
+                self.gpgKeyLookup
+            ]
+                .map(GPGVerificationLogic.normalizeFingerprint)
+                .first(where: { $0.count == 40 })
+
+            if let selectedFingerprint {
+                switch GPGVerificationLogic.verdict(
+                    exitStatus: Int(result.status),
+                    statusOutput: statusOutput,
+                    expectedFingerprint: selectedFingerprint
+                ) {
+                case let .verified(signingFingerprint, primaryFingerprint):
+                    announce("GPG 签名验证成功，公钥指纹匹配", kind: .success)
+                    appendLog("实际签名指纹：\(signingFingerprint)")
+                    appendLog("实际主密钥指纹：\(primaryFingerprint ?? "未提供")")
+                    appendLog("核对指纹：\(selectedFingerprint)")
+                    appendLog(detail == "（无输出）" ? "签名与原文件匹配。" : detail)
+                case let .signatureValidWrongKey(signingFingerprint, primaryFingerprint):
+                    announce("签名有效，但不是选中的公钥", kind: .failure)
+                    appendLog("实际签名指纹：\(signingFingerprint)")
+                    appendLog("实际主密钥指纹：\(primaryFingerprint ?? "未提供")")
+                    appendLog("期望指纹：\(selectedFingerprint)")
+                case .invalidSignature:
+                    announce("GPG 签名验证失败", kind: .failure)
+                    appendLog(detail == "（无输出）" ? statusOutput : detail)
+                case .missingFingerprint:
+                    announce("无法读取签名者指纹，拒绝判定", kind: .failure)
+                    appendLog(detail == "（无输出）" ? statusOutput : detail)
+                }
+            } else if result.status == 0, let signature = GPGVerificationLogic.validSignature(from: statusOutput) {
                 announce("GPG 签名验证成功", kind: .success)
+                appendLog("实际签名指纹：\(signature.signingFingerprint)")
+                appendLog("实际主密钥指纹：\(signature.primaryFingerprint ?? "未提供")")
+                appendLog("当前未选择期望指纹；如需确认具体软件发布者，请先在上方读取并选择公钥。")
                 appendLog(detail == "（无输出）" ? "签名与原文件匹配。" : detail)
             } else {
                 announce("GPG 签名验证失败", kind: .failure)
-                appendLog(detail == "（无输出）" ? Self.text(result.stdout) : detail)
+                appendLog(detail == "（无输出）" ? statusOutput : detail)
             }
         }
     }
@@ -3851,9 +3804,13 @@ struct ContentView: View {
                     Button {
                         selectedGPGSection = section
                     } label: {
-                        Label(section.title, systemImage: section.systemImage)
-                            .font(.callout.weight(selectedGPGSection == section ? .semibold : .regular))
-                            .frame(maxWidth: .infinity, minHeight: 32)
+                        ZStack {
+                            Color.clear
+                            Label(section.title, systemImage: section.systemImage)
+                                .font(.callout.weight(selectedGPGSection == section ? .semibold : .regular))
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .frame(maxWidth: .infinity, minHeight: 32)
@@ -3915,8 +3872,6 @@ struct ContentView: View {
             gpgEncryptContent
         case .sign:
             gpgSignContent
-        case .downloadVerify:
-            gpgDownloadVerifyContent
         case .publish:
             gpgPublishContent
         }
@@ -3970,7 +3925,6 @@ struct ContentView: View {
                         Button("本地生成") { selectedGPGSection = .generate }
                         Button("文件加密") { selectedGPGSection = .encrypt }
                         Button("签名验证") { selectedGPGSection = .sign }
-                        Button("下载验证") { selectedGPGSection = .downloadVerify }
                         Button("公布公钥") { selectedGPGSection = .publish }
                     }
                 }
@@ -4306,13 +4260,9 @@ struct ContentView: View {
                     HStack(spacing: 8) {
                         TextField("对方邮箱或完整公钥指纹", text: $model.gpgEncryptRecipient)
                             .textFieldStyle(.roundedBorder)
-                        Button("读取公钥库") { model.refreshGPGKeys() }
-                            .disabled(model.busy)
-                        Button("导入对方公钥…") { model.importGPGPublicKey() }
-                            .disabled(model.busy)
                     }
                     Toggle("同时加密给自己（建议开启，方便保留副本）", isOn: $model.gpgEncryptToSelf)
-                    Text("加密使用对方公钥；对方用自己的私钥/YubiKey 解密。开启后会额外加密给你的公钥，因此你也能解开自己保存的副本。")
+                    Text("公钥读取、网络查询和删除统一在“签名验证”页完成；选中的公钥会自动同步到这里。加密使用对方公钥；对方用自己的私钥/YubiKey 解密。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -4370,6 +4320,48 @@ struct ContentView: View {
 
     private var gpgSignContent: some View {
         VStack(alignment: .leading, spacing: 10) {
+            GroupBox("GPG 公钥库：本地优先，缺少时联网查询") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        TextField("邮箱或完整 40 位指纹", text: $model.gpgKeyLookup)
+                            .textFieldStyle(.roundedBorder)
+                        Button("读取公钥库") { model.refreshGPGKeys() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(model.busy)
+                        Button("导入 .asc…") { model.importGPGPublicKey() }
+                            .disabled(model.busy)
+                        Button("删除选中公钥") { model.deleteSelectedGPGPublicKey() }
+                            .disabled(model.busy)
+                    }
+                    if !model.gpgKeys.isEmpty {
+                        Picker(
+                            "已发现公钥",
+                            selection: Binding(
+                                get: { model.gpgSelectedPublicKey },
+                                set: { value in
+                                    model.gpgSelectedPublicKey = value
+                                    model.gpgKeyLookup = value
+                                    model.gpgEncryptRecipient = value
+                                }
+                            )
+                        ) {
+                            Text("请选择公钥").tag("")
+                            ForEach(model.gpgKeys) { key in
+                                Text(key.displayName).tag(key.fingerprint)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                    Text("先查本机 GPG 公钥库；没有匹配时，完整指纹使用 keyserver，邮箱尝试 WKD/keyserver。网络拿到的公钥不会自动等同于可信身份，请核对完整指纹。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("删除只针对本机公钥库，不会删除 YubiKey 或服务器上的公钥；对应私钥存在时程序会拒绝删除。")
+                        .font(.caption)
+                        .foregroundStyle(CyberpunkTheme.orange)
+                }
+                .padding(4)
+            }
+
             GroupBox("第 1 步：选择自己的签名身份") {
                 VStack(alignment: .leading, spacing: 7) {
                     if !model.gpgSecretKeys.isEmpty {
@@ -4431,81 +4423,6 @@ struct ContentView: View {
             Text("签名验证只能证明文件与签名匹配；是否信任签名人，还要通过指纹、线下渠道或可信密钥服务器核对。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        }
-    }
-
-    private var gpgDownloadVerifyContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            GroupBox("VeraCrypt 官方公钥") {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("官方指纹")
-                            .font(.callout.weight(.semibold))
-                            .frame(width: 72, alignment: .leading)
-                        Text(GPGVerificationLogic.veraCryptFingerprint)
-                            .font(.system(.callout, design: .monospaced))
-                            .textSelection(.enabled)
-                            .foregroundStyle(CyberpunkTheme.cyan)
-                    }
-                    Text("这是 VeraCrypt 下载页公布的 PGP 公钥指纹。程序会先下载公钥，再用 GPG 的 show-only 预览读取指纹；匹配前不会导入本机密钥库。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(GPGVerificationLogic.veraCryptPublicKeyURL.absoluteString)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(CyberpunkTheme.muted)
-                        .textSelection(.enabled)
-                    HStack(spacing: 8) {
-                        Button("打开 VeraCrypt 官方下载页") { model.openVeraCryptDownloadPage() }
-                        Button("下载并校验公钥") { model.downloadAndImportVeraCryptKey() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(model.busy)
-                    }
-                    Label(
-                        model.veraCryptKeyStatus,
-                        systemImage: model.veraCryptKeyImported ? "checkmark.shield.fill" : "exclamationmark.shield"
-                    )
-                    .foregroundStyle(model.veraCryptKeyImported ? CyberpunkTheme.green : CyberpunkTheme.orange)
-                    .textSelection(.enabled)
-                }
-                .padding(4)
-            }
-
-            GroupBox("验证 VeraCrypt 下载文件") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("从官方页面下载同一版本的原文件（例如 .dmg）和对应的 .sig 文件，然后分别拖入下面两个区域。程序会同时检查文件完整性和签名者是否为上面的官方指纹。")
-                        .font(.callout)
-                    HStack(alignment: .top, spacing: 10) {
-                        DropPanel(
-                            title: "VeraCrypt 原文件",
-                            prompt: "拖入 .dmg / 安装文件",
-                            url: model.veraCryptOriginalFile,
-                            choose: model.chooseVeraCryptOriginalFile,
-                            receive: model.setVeraCryptOriginalFile
-                        )
-                        DropPanel(
-                            title: ".sig 签名文件",
-                            prompt: "拖入对应 .sig",
-                            url: model.veraCryptSignatureFile,
-                            choose: model.chooseVeraCryptSignatureFile,
-                            receive: model.setVeraCryptSignatureFile
-                        )
-                    }
-                    HStack(spacing: 8) {
-                        Button("验证 VeraCrypt 签名") { model.requestVeraCryptVerify() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(model.busy)
-                        Text("成功条件：签名有效 + 官方指纹 \(GPGVerificationLogic.veraCryptFingerprint)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                }
-                .padding(4)
-            }
-
-            Text("注意：签名验证不等于自动安装，也不会修改 VeraCrypt 或 YubiKey。若文件来自其他镜像，仍建议先对照官方下载页的版本、文件名和指纹。")
-                .font(.caption)
-                .foregroundStyle(CyberpunkTheme.orange)
         }
     }
 

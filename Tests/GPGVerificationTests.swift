@@ -27,6 +27,52 @@ struct GPGVerificationTests {
             "colon import preview should expose every key fingerprint"
         )
 
+        let candidates = [
+            GPGKeyLookupCandidate(
+                fingerprint: expected,
+                userID: "VeraCrypt Team <veracrypt@amcrypto.jp>"
+            ),
+            GPGKeyLookupCandidate(
+                fingerprint: String(repeating: "D", count: 40),
+                userID: "Other Software <release@example.com>"
+            )
+        ]
+        check(
+            GPGKeyLookupLogic.localMatch(
+                query: spaced,
+                candidates: candidates
+            )?.fingerprint == expected,
+            "a local fingerprint match should be found without network access"
+        )
+        check(
+            GPGKeyLookupLogic.localMatch(
+                query: "veracrypt@amcrypto.jp",
+                candidates: candidates
+            )?.fingerprint == expected,
+            "a local email match should be found without network access"
+        )
+        check(
+            GPGKeyLookupLogic.remoteArguments(
+                query: expected,
+                keyserver: "hkps://keys.openpgp.org"
+            ) == [
+                "--batch", "--keyserver", "hkps://keys.openpgp.org",
+                "--recv-keys", expected
+            ],
+            "an exact fingerprint should use keyserver recv-keys"
+        )
+        check(
+            GPGKeyLookupLogic.remoteArguments(
+                query: "veracrypt@amcrypto.jp",
+                keyserver: "hkps://keys.openpgp.org"
+            ) == [
+                "--batch", "--keyserver", "hkps://keys.openpgp.org",
+                "--auto-key-locate", "clear,wkd,keyserver",
+                "--locate-keys", "veracrypt@amcrypto.jp"
+            ],
+            "an email query should use WKD/keyserver lookup"
+        )
+
         let primarySignatureStatus = """
         [GNUPG:] GOODSIG \(expected) VeraCrypt
         [GNUPG:] VALIDSIG \(expected) 20260826 1787702400 0 1 10 00 \(expected)

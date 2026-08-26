@@ -13,10 +13,6 @@ enum GPGVerificationVerdict: Equatable {
 }
 
 enum GPGVerificationLogic {
-    static let veraCryptFingerprint = "5069A233D55A0EEB174A5FC3821ACD02680D16DE"
-    static let veraCryptPublicKeyURL = URL(string: "https://amcrypto.jp/VeraCrypt/VeraCrypt_PGP_public_key.asc")!
-    static let veraCryptDownloadURL = URL(string: "https://veracrypt.jp/zh-cn/Downloads.html")!
-
     static func normalizeFingerprint(_ value: String) -> String {
         let hex = value.unicodeScalars.filter { scalar in
             switch scalar.value {
@@ -79,5 +75,60 @@ enum GPGVerificationLogic {
             signingFingerprint: signature.signingFingerprint,
             primaryFingerprint: signature.primaryFingerprint
         )
+    }
+}
+
+struct GPGKeyLookupCandidate: Equatable {
+    let fingerprint: String
+    let userID: String
+}
+
+enum GPGKeyLookupLogic {
+    static func localMatch(
+        query: String,
+        candidates: [GPGKeyLookupCandidate]
+    ) -> GPGKeyLookupCandidate? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let normalizedQuery = GPGVerificationLogic.normalizeFingerprint(trimmed)
+        if isFullFingerprintQuery(trimmed) {
+            return candidates.first {
+                GPGVerificationLogic.normalizeFingerprint($0.fingerprint) == normalizedQuery
+            }
+        }
+
+        let lowercasedQuery = trimmed.lowercased()
+        return candidates.first {
+            $0.userID.lowercased().contains(lowercasedQuery)
+        }
+    }
+
+    static func remoteArguments(query: String, keyserver: String) -> [String] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isFullFingerprintQuery(trimmed) {
+            return [
+                "--batch", "--keyserver", keyserver,
+                "--recv-keys", GPGVerificationLogic.normalizeFingerprint(trimmed)
+            ]
+        }
+        return [
+            "--batch", "--keyserver", keyserver,
+            "--auto-key-locate", "clear,wkd,keyserver",
+            "--locate-keys", trimmed
+        ]
+    }
+
+    static func isFullFingerprintQuery(_ query: String) -> Bool {
+        let normalized = GPGVerificationLogic.normalizeFingerprint(query)
+        let hasOnlyHexAndSeparators = query.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 48...57, 65...70, 97...102, 32, 9:
+                return true
+            default:
+                return false
+            }
+        }
+        return hasOnlyHexAndSeparators && normalized.count == 40
     }
 }

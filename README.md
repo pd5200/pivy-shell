@@ -224,40 +224,43 @@ CSR 不是私钥，也不是最终证书，而是“请 CA 根据这个公钥和
 - 导出 gpg-public-key.asc 文件；
 - 发布到 OpenPGP 公钥服务器。公钥本身可以公开，但指纹仍应通过另一条可信渠道确认。
 
-### 验证 VeraCrypt 官方下载文件
+### 通用公钥库与软件签名验证
 
-VeraCrypt 下载页会提供安装文件、对应的 `.sig` 签名和官方 PGP 公钥指纹。本工具的“GPG 工具 → 下载验证”页已经内置以下官方信息：
+“GPG 工具 → 签名验证”页顶部就是通用公钥库，不需要再切换到其他页面：
 
-- 官方下载页：[veracrypt.jp/zh-cn/Downloads.html](https://veracrypt.jp/zh-cn/Downloads.html)
-- 公钥地址：<https://amcrypto.jp/VeraCrypt/VeraCrypt_PGP_public_key.asc>
-- 官方指纹：`5069 A233 D55A 0EEB 174A 5FC3 821A CD02 680D 16DE`
+1. 在输入框填写软件发布者邮箱，或完整 40 位公钥指纹。
+2. 点击“读取公钥库”。程序先检查本机公钥库；本地没有匹配时，完整指纹使用 `recv-keys`，邮箱会尝试 WKD/keyserver。
+3. 网络查询成功后，程序重新读取本机公钥库，并把匹配的公钥选中。网络公钥不会自动等于可信身份，仍要核对发布方官网公布的完整指纹。
+4. 把原文件和对应的 `.sig`/`.asc` 拖入下面的验证区域，点击“验证 GPG 签名”。
+5. 如果选中了公钥，程序会额外检查签名中的实际签名者/主密钥指纹；“签名有效但不是选中的公钥”会判定失败。
 
-使用界面时按这个顺序操作：
+删除公钥：
 
-1. 点击“打开 VeraCrypt 官方下载页”，从同一版本下载原文件和对应的 `.sig` 文件。
-2. 进入“GPG 工具 → 下载验证”，点击“下载并校验公钥”。程序会先在 show-only 预览模式读取指纹，只有完全匹配官方指纹才会导入本机 GPG 公钥库。
-3. 把原文件（例如 `.dmg`）拖入“VeraCrypt 原文件”，把对应的 `.sig` 拖入右侧区域。
-4. 点击“验证 VeraCrypt 签名”。只有“签名数学有效”且“实际签名者的主密钥/签名密钥指纹匹配官方指纹”时才显示成功。
+- 在“已发现公钥”下拉框选择公钥，点击“删除选中公钥”。
+- 只删除本机公钥库中的公开密钥，不影响 YubiKey、服务器或公钥服务器。
+- 如果对应私钥存在，程序会拒绝删除，避免误删自己的 GPG 身份。
+- 也可以使用“导入 .asc…”导入从软件官网获得的公钥。
 
-“签名数学上有效，但不是 VeraCrypt 官方密钥”必须视为失败；不能只看 GPG 输出中的 `Good signature` 或邮箱名称。下载、导入和验证都只在本机执行，不会自动安装 VeraCrypt。
+以 VeraCrypt 为例，官方下载页公布的公钥指纹是 `5069 A233 D55A 0EEB 174A 5FC3 821A CD02 680D 16DE`；应在通用输入框填写该指纹，再读取公钥并验证对应安装文件和 `.sig`。参考：[VeraCrypt 官方下载页](https://veracrypt.jp/zh-cn/Downloads.html)。
 
 命令行等价流程如下，适合排查 GUI 或学习 GPG：
 
 ~~~bash
-curl -fsSL \
-  https://amcrypto.jp/VeraCrypt/VeraCrypt_PGP_public_key.asc \
-  -o VeraCrypt_PGP_public_key.asc
+# 完整指纹：从 keyserver 查询；邮箱：尝试 WKD/keyserver
+gpg --batch --keyserver hkps://keys.openpgp.org \
+  --recv-keys <软件发布者完整40位指纹>
+gpg --batch --keyserver hkps://keys.openpgp.org \
+  --auto-key-locate clear,wkd,keyserver \
+  --locate-keys <软件发布者邮箱>
 
-# 先预览指纹，不修改本机密钥库
-gpg --batch --with-colons \
-  --import-options show-only \
-  --import VeraCrypt_PGP_public_key.asc
+# 如果官网提供 .asc 公钥文件，也可以手动导入
+gpg --import vendor-public-key.asc
 
-# 只在核对到 5069A233D55A0EEB174A5FC3821ACD02680D16DE 后导入
-gpg --import VeraCrypt_PGP_public_key.asc
+# 查看并核对实际指纹
+gpg --fingerprint <软件发布者邮箱或指纹>
 
 # 原文件和 .sig 必须来自同一个官方版本
-gpg --status-fd 1 --verify VeraCrypt-文件.sig VeraCrypt-文件
+gpg --status-fd 1 --verify software-file.sig software-file
 ~~~
 
 ## GPG PIN 弹窗异常
