@@ -224,6 +224,42 @@ CSR 不是私钥，也不是最终证书，而是“请 CA 根据这个公钥和
 - 导出 gpg-public-key.asc 文件；
 - 发布到 OpenPGP 公钥服务器。公钥本身可以公开，但指纹仍应通过另一条可信渠道确认。
 
+### 验证 VeraCrypt 官方下载文件
+
+VeraCrypt 下载页会提供安装文件、对应的 `.sig` 签名和官方 PGP 公钥指纹。本工具的“GPG 工具 → 下载验证”页已经内置以下官方信息：
+
+- 官方下载页：[veracrypt.jp/zh-cn/Downloads.html](https://veracrypt.jp/zh-cn/Downloads.html)
+- 公钥地址：<https://amcrypto.jp/VeraCrypt/VeraCrypt_PGP_public_key.asc>
+- 官方指纹：`5069 A233 D55A 0EEB 174A 5FC3 821A CD02 680D 16DE`
+
+使用界面时按这个顺序操作：
+
+1. 点击“打开 VeraCrypt 官方下载页”，从同一版本下载原文件和对应的 `.sig` 文件。
+2. 进入“GPG 工具 → 下载验证”，点击“下载并校验公钥”。程序会先在 show-only 预览模式读取指纹，只有完全匹配官方指纹才会导入本机 GPG 公钥库。
+3. 把原文件（例如 `.dmg`）拖入“VeraCrypt 原文件”，把对应的 `.sig` 拖入右侧区域。
+4. 点击“验证 VeraCrypt 签名”。只有“签名数学有效”且“实际签名者的主密钥/签名密钥指纹匹配官方指纹”时才显示成功。
+
+“签名数学上有效，但不是 VeraCrypt 官方密钥”必须视为失败；不能只看 GPG 输出中的 `Good signature` 或邮箱名称。下载、导入和验证都只在本机执行，不会自动安装 VeraCrypt。
+
+命令行等价流程如下，适合排查 GUI 或学习 GPG：
+
+~~~bash
+curl -fsSL \
+  https://amcrypto.jp/VeraCrypt/VeraCrypt_PGP_public_key.asc \
+  -o VeraCrypt_PGP_public_key.asc
+
+# 先预览指纹，不修改本机密钥库
+gpg --batch --with-colons \
+  --import-options show-only \
+  --import VeraCrypt_PGP_public_key.asc
+
+# 只在核对到 5069A233D55A0EEB174A5FC3821ACD02680D16DE 后导入
+gpg --import VeraCrypt_PGP_public_key.asc
+
+# 原文件和 .sig 必须来自同一个官方版本
+gpg --status-fd 1 --verify VeraCrypt-文件.sig VeraCrypt-文件
+~~~
+
 ## GPG PIN 弹窗异常
 
 如果出现 Screen or window too small、PIN 窗口不出现或 gpg/card> 卡住：
@@ -282,10 +318,12 @@ PIV 槽位适合“私钥运算”，不是用来直接吞吐任意大小文件�
 
 ~~~text
 PivyShell.swift       macOS SwiftUI 主程序
+GPGVerificationLogic.swift GPG 指纹解析和官方签名判定规则
 Info.plist            App Bundle 信息
 IconGenerator.swift   生成应用图标
 build.sh              编译程序、生成图标并组装 PivyShell.app
 docs/                 README 使用截图
+Tests/                纯规则测试
 README.md             使用、安装和安全说明
 ~~~
 
@@ -293,6 +331,8 @@ README.md             使用、安装和安全说明
 
 ~~~bash
 ./build.sh
+swiftc -parse-as-library GPGVerificationLogic.swift Tests/GPGVerificationTests.swift -o /tmp/pivy-gpg-verification-tests
+/tmp/pivy-gpg-verification-tests
 git diff --check
 ~~~
 

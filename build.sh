@@ -19,6 +19,7 @@ if [[ "$BUILD_UNIVERSAL" == "1" ]]; then
   swiftc \
     -parse-as-library \
     -target arm64-apple-macos13 \
+    "$SCRIPT_DIR/GPGVerificationLogic.swift" \
     "$SCRIPT_DIR/PivyShell.swift" \
     -o "$ARM64_BINARY" \
     -framework AppKit \
@@ -27,6 +28,7 @@ if [[ "$BUILD_UNIVERSAL" == "1" ]]; then
   swiftc \
     -parse-as-library \
     -target x86_64-apple-macos13 \
+    "$SCRIPT_DIR/GPGVerificationLogic.swift" \
     "$SCRIPT_DIR/PivyShell.swift" \
     -o "$X86_64_BINARY" \
     -framework AppKit \
@@ -37,6 +39,7 @@ if [[ "$BUILD_UNIVERSAL" == "1" ]]; then
 else
   swiftc \
     -parse-as-library \
+    "$SCRIPT_DIR/GPGVerificationLogic.swift" \
     "$SCRIPT_DIR/PivyShell.swift" \
     -o "$CONTENTS_DIR/MacOS/PivyShell" \
     -framework AppKit \
