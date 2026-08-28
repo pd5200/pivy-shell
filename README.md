@@ -1,6 +1,6 @@
 # Pivy YubiKey 本地工具
 
-一个面向 macOS 的 YubiKey PIV/OpenPGP 图形界面工具。它把 pivy-tool、GnuPG 和 macOS 的智能卡能力集中到一个窗口中，适合本地演示、日常文件签名/加密，以及服务器证书准备。
+一个面向 macOS 的 YubiKey PIV、OpenPGP 和 FIDO2 图形界面工具。它把 pivy-tool、GnuPG、OpenSSH 和 macOS 的智能卡能力集中到一个窗口中，适合本地演示、日常文件签名/加密、服务器证书准备和 Linux SSH 登录。
 
 ![Pivy YubiKey 本地工具](docs/pivy-shell-screenshot.png)
 
@@ -25,6 +25,14 @@
 - 读取 OpenPGP 卡状态、公钥、私钥索引和主密钥/子密钥结构。
 - 提供在 YubiKey 上生成密钥、把已有子密钥迁移到卡片、导出/复制公钥和发布公钥的向导。
 
+### FIDO2 SSH
+
+- **FIDO 服务器**：检查 OpenSSH 版本和 `sk-*` 密钥类型支持。
+- 生成 `ed25519-sk` 或 `ecdsa-sk` 的驻留/非驻留密钥命令，并可要求每次 PIN 验证。
+- 根据 Linux 用户名和服务器地址生成公钥安装、测试登录和 `~/.ssh/config` 配置。
+- 说明驻留密钥在新电脑上的 `ssh-keygen -K` 恢复流程、备用 YubiKey 和丢卡处置。
+- 页面只生成和复制命令，不会自动登录或修改服务器。
+
 ### 使用体验
 
 - 插入或拔出 YubiKey 后自动监测并更新左上角状态。
@@ -37,14 +45,15 @@
 
 | 需求 | 推荐功能 | 说明 |
 | --- | --- | --- |
-| 服务器 SSH/证书认证 | PIV 9a + 证书/公钥/CSR | 服务器保存公钥或 CA 签发的证书，私钥留在卡内 |
+| Linux SSH 登录（现代 OpenSSH） | FIDO 服务器 | 推荐使用 `ed25519-sk` 驻留密钥；服务器只保存公钥 |
+| 企业证书/智能卡认证 | PIV 9a + 证书/公钥/CSR | 服务器保存公钥或 CA 签发的证书，私钥留在卡内 |
 | 小文件完整性证明 | PIV 9c | 受 pivy-tool 输入大小限制，适合配置、文本和小型文件 |
 | 小文件的卡内加密演示 | PIV 9d | 产生 .pivybox，必须用支持该格式的 Pivy 工具解密 |
 | 大图片、大文档、归档文件 | GPG | 文件本体由电脑处理，YubiKey OpenPGP 私钥用于解密/签名 |
 | Git commit/tag 签名 | GPG 签名子密钥 | Git 调用 GnuPG 生成可验证的提交签名 |
 | 9e 卡片认证 | PIV 9e | 通常由企业卡片系统或专用协议使用，个人日常很少直接操作 |
 
-PIV 的 9a/9c/9d/9e 是四个用途不同的 PIV 槽位，和 YubiKey 的 OpenPGP/GPG 应用是两套独立体系。PIV 证书不能直接当成 GPG 公钥，GPG 密钥也不会自动出现在 PIV 槽位中。
+PIV、OpenPGP/GPG 和 FIDO2 是 YubiKey 上相互独立的应用。PIV 证书不能直接当成 GPG 公钥，GPG 密钥不会自动出现在 PIV 槽位中，生成 FIDO2 SSH 密钥也不会覆盖前两者。
 
 ## 安装
 
@@ -54,6 +63,7 @@ PIV 的 9a/9c/9d/9e 是四个用途不同的 PIV 槽位，和 YubiKey 的 OpenPG
 - 一把支持 CCID 的 YubiKey
 - PIV 功能：pivy-tool
 - GPG 功能：GnuPG 和 pinentry-mac
+- FIDO2 SSH：Homebrew OpenSSH（macOS 系统版通常没有编译 FIDO 支持）
 - CSR/证书相关操作：OpenSSL
 
 如果电脑没有 Homebrew，先按终端提示安装：
@@ -70,6 +80,9 @@ brew install --cask pivy-app
 
 # GPG/OpenPGP 和 macOS PIN 弹窗
 brew install gnupg pinentry-mac
+
+# FIDO2 SSH（提供带 libfido2 支持的 ssh/ssh-keygen）
+brew install openssh
 
 # CSR/证书工具需要 OpenSSL；macOS 自带版本通常也可用
 brew install openssl@3
@@ -125,8 +138,9 @@ git push origin v0.12.0
 1. 安装所需依赖并插入 YubiKey。
 2. 打开“设备”，等待左上角从“等待设备”变为已连接，然后点击“读取设备”。
 3. 需要 PIV 时，确认 9a/9c/9d/9e 槽位和证书用途；需要 GPG 时，进入“GPG 工具 → 密钥与卡片”，读取 OpenPGP 卡。
-4. 执行签名、解密或卡内密钥操作时，在弹出的 PIN 窗口输入 PIN，并按系统提示触摸 YubiKey。
-5. 任何失败都先看底部“运行日志”。窗口不会因为单个文件或设备错误而关闭。
+4. 需要登录 Linux 服务器时，进入“FIDO 服务器”，填写服务器信息并按页面顺序复制命令。
+5. 执行签名、解密或卡内密钥操作时，在弹出的 PIN 窗口输入对应应用的 PIN，并按系统提示触摸 YubiKey。
+6. 任何失败都先看底部“运行日志”。窗口不会因为单个文件或设备错误而关闭。
 
 插拔状态由程序自动监测。如果底层 CCID 被其他程序占用，先关闭 Yubico Authenticator、GPG 终端会话等读卡程序，再点击“读取设备”。应用也会尝试释放 GPG 的 scdaemon 会话并重试。
 
@@ -161,6 +175,35 @@ git push origin v0.12.0
 4. 服务器保存公钥/证书；以后认证时，YubiKey 负责用 9a 私钥签名，私钥不会离开卡片。
 
 CSR 不是私钥，也不是最终证书，而是“请 CA 根据这个公钥和身份信息签发证书”的申请文件。直接导出公钥适合服务器自己做公钥认证；需要标准证书链时使用 CSR。
+
+## FIDO2 登录 Linux SSH 服务器
+
+“FIDO 服务器”页面使用 OpenSSH 的 `ed25519-sk`/`ecdsa-sk` 类型。私钥在 YubiKey FIDO2 应用中生成；电脑上的无扩展名文件是定位卡内凭据的句柄，`.pub` 才是要安装到服务器的公钥。
+
+推荐使用驻留密钥并要求 PIN：
+
+~~~bash
+ssh-keygen -t ed25519-sk -O resident -O verify-required \
+  -O application=ssh:my-server \
+  -C "your@email.com" \
+  -f ~/.ssh/id_ed25519_sk_my-server
+~~~
+
+然后把公钥安装到服务器并测试登录：
+
+~~~bash
+ssh-copy-id -i ~/.ssh/id_ed25519_sk_my-server.pub user@server.example.com
+ssh -i ~/.ssh/id_ed25519_sk_my-server user@server.example.com
+~~~
+
+重要区别：
+
+- FIDO2 PIN 与 PIV PIN、OpenPGP PIN 相互独立。
+- 驻留密钥可以在同一把 YubiKey 插入新电脑后使用 `ssh-keygen -K` 恢复句柄；它不能在 YubiKey 丢失后恢复私钥。
+- 非驻留密钥必须保留本机句柄文件，否则即使卡还在也无法定位对应凭据。
+- 备用卡应独立生成另一套密钥，并把两张卡的 `.pub` 都加入服务器；不要尝试复制卡内私钥。
+- 丢卡后立即从服务器 `authorized_keys` 删除对应公钥，并使用备用卡、服务器控制台或其他应急方式登录。
+- OpenSSH 8.2+ 支持安全密钥类型，8.3+ 支持 `ssh-keygen -K`，8.4+ 支持 `verify-required`。版本足够仍需确认构建包含 FIDO 支持；页面会同时检查 `ssh -Q key`。
 
 ## GPG：公钥、主密钥和子密钥
 
@@ -322,6 +365,7 @@ PIV 槽位适合“私钥运算”，不是用来直接吞吐任意大小文件�
 ~~~text
 PivyShell.swift       macOS SwiftUI 主程序
 GPGVerificationLogic.swift GPG 指纹解析和官方签名判定规则
+FIDOServerLogic.swift FIDO2/OpenSSH 版本、输入校验和命令生成规则
 Info.plist            App Bundle 信息
 IconGenerator.swift   生成应用图标
 build.sh              编译程序、生成图标并组装 PivyShell.app
@@ -336,6 +380,8 @@ README.md             使用、安装和安全说明
 ./build.sh
 swiftc -parse-as-library GPGVerificationLogic.swift Tests/GPGVerificationTests.swift -o /tmp/pivy-gpg-verification-tests
 /tmp/pivy-gpg-verification-tests
+swiftc -parse-as-library FIDOServerLogic.swift Tests/FIDOServerTests.swift -o /tmp/pivy-fido-server-tests
+/tmp/pivy-fido-server-tests
 git diff --check
 ~~~
 

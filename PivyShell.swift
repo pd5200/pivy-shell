@@ -323,6 +323,17 @@ final class PivyModel: ObservableObject {
     @Published var gpgEncryptToSelf = true
     @Published var gpgCardSummary = "尚未读取 OpenPGP 卡"
     @Published var gpgKeyserver = "hkps://keys.openpgp.org"
+    @Published var fidoAlgorithm = FIDOKeyAlgorithm.ed25519
+    @Published var fidoResident = true
+    @Published var fidoVerifyRequired = true
+    @Published var fidoComment = "your@email.com"
+    @Published var fidoKeyName = "server"
+    @Published var fidoApplicationLabel = "server"
+    @Published var fidoUsername = "ubuntu"
+    @Published var fidoHost = "server.example.com"
+    @Published var sshEnvironmentSummary = "尚未检查 OpenSSH 环境"
+    @Published var sshSupportsFIDO = false
+    @Published var sshEnvironmentChecking = false
     @Published var pin = ""
     @Published var showPINPrompt = false
     @Published var pinPromptTitle = "输入 PIV PIN"
@@ -395,6 +406,102 @@ final class PivyModel: ObservableObject {
         ["/opt/homebrew/bin/gpgconf", "/usr/local/bin/gpgconf", "/usr/local/MacGPG2/bin/gpgconf"].first {
             FileManager.default.isExecutableFile(atPath: $0)
         }
+    }
+
+    var sshPath: String? {
+        ["/opt/homebrew/bin/ssh", "/usr/local/bin/ssh", "/usr/bin/ssh"].first {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }
+    }
+
+    var sshKeygenPath: String? {
+        ["/opt/homebrew/bin/ssh-keygen", "/usr/local/bin/ssh-keygen", "/usr/bin/ssh-keygen"].first {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }
+    }
+
+    var sshCopyIDPath: String? {
+        ["/opt/homebrew/bin/ssh-copy-id", "/usr/local/bin/ssh-copy-id", "/usr/bin/ssh-copy-id"].first {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }
+    }
+
+    func refreshSSHEnvironment() {
+        guard !sshEnvironmentChecking else { return }
+        guard let sshPath else {
+            sshEnvironmentSummary = "未找到 ssh。请安装 Homebrew OpenSSH：brew install openssh"
+            sshSupportsFIDO = false
+            announce("未找到 OpenSSH", kind: .warning)
+            return
+        }
+
+        sshEnvironmentChecking = true
+        sshEnvironmentSummary = "正在检查 \(sshPath)…"
+        DispatchQueue.global(qos: .utility).async {
+            let versionResult = Self.execute(tool: sshPath, arguments: ["-V"], input: nil)
+            let keyTypesResult = Self.execute(tool: sshPath, arguments: ["-Q", "key"], input: nil)
+            let versionOutput = [versionResult.stdout, versionResult.stderr]
+                .compactMap { String(data: $0, encoding: .utf8) }
+                .joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let keyTypesOutput = String(data: keyTypesResult.stdout, encoding: .utf8) ?? ""
+            let version = FIDOServerLogic.parseOpenSSHVersion(versionOutput)
+            let reportsSecurityKeyType = keyTypesResult.status == 0
+                && FIDOServerLogic.reportsSecurityKeyTypes(keyTypesOutput)
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                sshEnvironmentChecking = false
+                sshSupportsFIDO = reportsSecurityKeyType
+
+                var lines = [
+                    "ssh：\(sshPath)",
+                    "ssh-keygen：\(sshKeygenPath ?? "未找到")",
+                    "版本：\(version.map(String.init(describing:)) ?? versionOutput)"
+                ]
+                if let version {
+                    let capabilities = FIDOServerLogic.capabilities(for: version)
+                    lines.append("OpenSSH 8.2+：\(capabilities.supportsSecurityKeys ? "满足" : "不满足")")
+                    lines.append("驻留密钥恢复 -K：\(capabilities.supportsResidentKeyRecovery ? "支持" : "版本过低")")
+                    lines.append("每次 PIN 验证：\(capabilities.supportsVerifyRequired ? "支持" : "版本过低")")
+                }
+                lines.append("FIDO2 -sk 密钥类型：\(reportsSecurityKeyType ? "当前构建支持" : "当前构建不支持")")
+                sshEnvironmentSummary = lines.joined(separator: "\n")
+
+                if reportsSecurityKeyType {
+                    announce("OpenSSH 已支持 FIDO2", kind: .success)
+                    appendLog("FIDO2 SSH 环境检查完成：\n\(sshEnvironmentSummary)")
+                } else {
+                    announce("当前 OpenSSH 不支持 FIDO2", kind: .warning)
+                    appendLog("当前 ssh 没有报告 ed25519-sk/ecdsa-sk。macOS 请执行 brew install openssh，并让 Homebrew bin 目录排在 PATH 前面。\n\(sshEnvironmentSummary)")
+                }
+            }
+        }
+    }
+
+    func makeFIDOServerCommands() throws -> FIDOServerCommands {
+        try FIDOServerLogic.commands(
+            for: FIDOServerConfiguration(
+                algorithm: fidoAlgorithm,
+                resident: fidoResident,
+                verifyRequired: fidoVerifyRequired,
+                comment: fidoComment,
+                keyName: fidoKeyName,
+                applicationLabel: fidoApplicationLabel,
+                username: fidoUsername,
+                host: fidoHost
+            ),
+            sshCommand: sshPath ?? "ssh",
+            sshKeygenCommand: sshKeygenPath ?? "ssh-keygen",
+            sshCopyIDCommand: sshCopyIDPath ?? "ssh-copy-id"
+        )
+    }
+
+    func copyFIDOServerText(_ text: String, title: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        announce("已复制：\(title)", kind: .success)
+        appendLog("\(title)：\n\(text)")
     }
 
     private func validateToolInput(_ file: URL, operation: String, maxBytes: Int, alternative: String) -> Bool {
@@ -2800,6 +2907,7 @@ private enum AppTab: String, CaseIterable, Hashable {
     case verify
     case encrypt
     case decrypt
+    case fido
     case gpg
     case tools
     case guide
@@ -2812,6 +2920,7 @@ private enum AppTab: String, CaseIterable, Hashable {
         case .verify: return "验证签名"
         case .encrypt: return "文件加密"
         case .decrypt: return "文件解密"
+        case .fido: return "FIDO 服务器"
         case .gpg: return "GPG 工具"
         case .tools: return "证书工具"
         case .guide: return "使用说明"
@@ -2826,6 +2935,7 @@ private enum AppTab: String, CaseIterable, Hashable {
         case .verify: return "使用原文件、签名文件和证书验证 9c 签名。"
         case .encrypt: return "使用 9d 槽把文件加密为 .pivybox。"
         case .decrypt: return "使用同一把 YubiKey 解密 .pivybox 文件。"
+        case .fido: return "使用 YubiKey FIDO2 安全密钥登录 Linux SSH 服务器。"
         case .gpg: return "使用 OpenPGP/GPG 处理大文件加密、解密、签名和验证。"
         case .tools: return "导出公钥、证书、槽位证明，或生成服务器认证 CSR。"
         case .guide: return "安装依赖、了解功能，并处理常见的 YubiKey 读卡问题。"
@@ -2840,6 +2950,7 @@ private enum AppTab: String, CaseIterable, Hashable {
         case .verify: return "checkmark.seal"
         case .encrypt: return "lock.fill"
         case .decrypt: return "lock.open"
+        case .fido: return "server.rack"
         case .gpg: return "lock.shield"
         case .tools: return "checkmark.seal.fill"
         case .guide: return "book.closed"
@@ -3389,6 +3500,8 @@ struct ContentView: View {
             encryptTab
         case .decrypt:
             decryptTab
+        case .fido:
+            fidoServerTab
         case .gpg:
             gpgTab
         case .tools:
@@ -3795,6 +3908,266 @@ struct ContentView: View {
             }
         }
         .padding(4)
+    }
+
+    private var fidoServerTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                GroupBox("它如何登录服务器") {
+                    HStack(alignment: .top, spacing: 14) {
+                        fidoFlowStep(
+                            number: "1",
+                            title: "生成硬件密钥",
+                            detail: "私钥在 YubiKey FIDO2 应用内生成，不会导出到电脑。"
+                        )
+                        fidoFlowStep(
+                            number: "2",
+                            title: "服务器保存公钥",
+                            detail: "只把 .pub 文件加入 Linux 账户的 ~/.ssh/authorized_keys。"
+                        )
+                        fidoFlowStep(
+                            number: "3",
+                            title: "PIN + 触摸登录",
+                            detail: "SSH 挑战由 YubiKey 签名；服务器验证签名后允许登录。"
+                        )
+                    }
+                    Text("FIDO2、PIV 和 OpenPGP/GPG 是 YubiKey 上相互独立的应用。这里生成 FIDO2 SSH 密钥，不会覆盖当前 PIV 证书或 GPG 密钥。FIDO2 PIN 也不是 PIV PIN 或 OpenPGP PIN。")
+                        .font(.caption)
+                        .foregroundStyle(CyberpunkTheme.orange)
+                        .padding(.top, 4)
+                }
+
+                GroupBox("第 1 步：检查本机 OpenSSH") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Button(model.sshEnvironmentChecking ? "检查中…" : "重新检查") {
+                                model.refreshSSHEnvironment()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(model.sshEnvironmentChecking)
+                            Button("复制安装命令") {
+                                model.copyFIDOServerText("brew install openssh", title: "安装 Homebrew OpenSSH")
+                            }
+                            Text(model.sshSupportsFIDO ? "当前 OpenSSH 可使用 FIDO2" : "macOS 系统 OpenSSH 通常没有 FIDO 支持")
+                                .font(.caption)
+                                .foregroundStyle(model.sshSupportsFIDO ? CyberpunkTheme.green : CyberpunkTheme.orange)
+                        }
+                        Text(model.sshEnvironmentSummary)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                            .background(CyberpunkTheme.surface.opacity(0.70))
+                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                        Text("最低要求：OpenSSH 8.2 支持 *-sk 密钥；8.3 支持 ssh-keygen -K 恢复驻留密钥；8.4 支持 verify-required。版本足够仍不代表构建包含 libfido2，因此本工具还会读取 ssh -Q key。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(4)
+                }
+
+                GroupBox("第 2 步：设置并生成 FIDO2 SSH 密钥") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("算法").font(.caption.weight(.semibold))
+                                Picker("算法", selection: $model.fidoAlgorithm) {
+                                    ForEach(FIDOKeyAlgorithm.allCases) { algorithm in
+                                        Text(algorithm.title).tag(algorithm)
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                            }
+                            VStack(alignment: .leading, spacing: 5) {
+                                Toggle("驻留密钥（推荐）", isOn: $model.fidoResident)
+                                Toggle("每次要求 PIN 验证", isOn: $model.fidoVerifyRequired)
+                            }
+                            .toggleStyle(.checkbox)
+                            Spacer(minLength: 0)
+                        }
+
+                        HStack(spacing: 10) {
+                            fidoTextField(title: "备注/邮箱", placeholder: "your@email.com", text: $model.fidoComment)
+                            fidoTextField(title: "本地密钥名称", placeholder: "server", text: $model.fidoKeyName)
+                            fidoTextField(title: "卡内用途标签", placeholder: "server", text: $model.fidoApplicationLabel)
+                        }
+
+                        Text(model.fidoResident
+                             ? "驻留密钥把可发现凭据保存在 YubiKey 中；换电脑后可用 ssh-keygen -K 重新取得句柄文件。"
+                             : "非驻留模式不占用驻留凭据空间，但 ~/.ssh 中生成的句柄文件必须备份；它不是私钥，却是定位卡内密钥所必需的。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        if let commands = try? model.makeFIDOServerCommands() {
+                            fidoCommandBlock(
+                                title: "生成密钥",
+                                detail: "运行后按提示输入 FIDO2 PIN 并触摸 YubiKey；不要在已有同名文件时直接确认覆盖。",
+                                command: commands.generate
+                            )
+                        }
+                    }
+                    .padding(4)
+                }
+
+                GroupBox("第 3 步：把公钥安装到 Linux 服务器") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            fidoTextField(title: "Linux 用户名", placeholder: "ubuntu", text: $model.fidoUsername)
+                            fidoTextField(title: "服务器域名或 IP", placeholder: "server.example.com", text: $model.fidoHost)
+                        }
+
+                        if let commands = try? model.makeFIDOServerCommands() {
+                            fidoCommandBlock(
+                                title: "安装公钥（推荐）",
+                                detail: "首次执行仍会要求服务器现有密码；它只把 .pub 公钥追加到目标账户。",
+                                command: commands.installPublicKey
+                            )
+                            fidoCommandBlock(
+                                title: "没有 ssh-copy-id 时的兼容命令",
+                                detail: "同样只追加公钥，不会把 YubiKey 私钥发送到服务器。",
+                                command: commands.installPublicKeyFallback
+                            )
+                            fidoCommandBlock(
+                                title: "测试登录",
+                                detail: "按提示输入 FIDO2 PIN 并触摸 YubiKey。",
+                                command: commands.login
+                            )
+                        } else {
+                            Text(fidoValidationMessage)
+                                .font(.callout)
+                                .foregroundStyle(CyberpunkTheme.orange)
+                        }
+                    }
+                    .padding(4)
+                }
+
+                if let commands = try? model.makeFIDOServerCommands() {
+                    GroupBox("第 4 步：保存 SSH 别名（可选）") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("把下面内容追加到 ~/.ssh/config，以后可直接执行 ssh \(FIDOServerLogic.normalizedLabel(model.fidoApplicationLabel, fallback: "server"))。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            fidoCommandBlock(
+                                title: "SSH Config 片段",
+                                detail: "这是配置文本，不是终端命令。",
+                                command: commands.sshConfig
+                            )
+                        }
+                        .padding(4)
+                    }
+
+                    GroupBox("第 5 步：换电脑、备用卡与丢失处理") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let restore = commands.restoreResident {
+                                fidoCommandBlock(
+                                    title: "在新电脑恢复驻留密钥句柄",
+                                    detail: "插入同一把 YubiKey 后执行；已有同名文件时先备份，命令可能询问是否覆盖。",
+                                    command: restore
+                                )
+                            } else {
+                                Text("当前选择的是非驻留密钥。换电脑必须带上原来的句柄文件；ssh-keygen -K 无法恢复它。")
+                                    .foregroundStyle(CyberpunkTheme.orange)
+                            }
+                            Divider()
+                            Text("备用 YubiKey：每张卡独立生成一套 FIDO2 SSH 密钥，把两张卡的 .pub 都加入服务器 authorized_keys。不要尝试复制卡内私钥。")
+                            Text("YubiKey 丢失：立即使用密码、控制台或备用卡登录服务器，删除丢失卡对应的 authorized_keys 公钥行；然后为新卡生成密钥并重新添加。")
+                            Text("驻留密钥的“可恢复”只表示能从同一把卡恢复本地句柄，不代表丢卡后能恢复私钥。关键服务器必须保留独立的应急登录方式。")
+                        }
+                        .font(.callout)
+                        .padding(4)
+                    }
+                }
+
+                GroupBox("常见问题") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("• unknown key type ed25519-sk：当前 ssh-keygen 没有 FIDO 支持；安装 Homebrew OpenSSH，并确认使用的是 /opt/homebrew/bin 或 /usr/local/bin 下的程序。")
+                        Text("• Key enrollment failed / device not found：确认 YubiKey 的 FIDO2 接口已启用，并关闭暂时占用设备的程序后重试。")
+                        Text("• Permission denied (publickey)：检查服务器账户、authorized_keys 中的公钥，以及文件权限；使用 ssh -vvv 查看详细协商过程。")
+                        Text("• PIN 错误：这里需要 FIDO2 PIN，可在 Yubico Authenticator 的 FIDO2 设置中设置或更改；它不是 PIV PIN。")
+                        Text("• 旧服务器：服务器端也必须认识 ed25519-sk/ecdsa-sk 公钥类型；过旧 OpenSSH 需要升级。")
+                    }
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .padding(4)
+                }
+            }
+            .padding(4)
+            .padding(.bottom, 236)
+        }
+        .onAppear {
+            if model.sshEnvironmentSummary == "尚未检查 OpenSSH 环境" {
+                model.refreshSSHEnvironment()
+            }
+        }
+    }
+
+    private func fidoFlowStep(number: String, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(number)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(CyberpunkTheme.background)
+                .frame(width: 24, height: 24)
+                .background(CyberpunkTheme.cyan)
+                .clipShape(Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.callout.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func fidoTextField(title: String, placeholder: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption.weight(.semibold))
+            TextField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func fidoCommandBlock(title: String, detail: String, command: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.callout.weight(.semibold))
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Button("复制") {
+                    model.copyFIDOServerText(command, title: title)
+                }
+            }
+            Text(command)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(CyberpunkTheme.surface.opacity(0.82))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(CyberpunkTheme.border.opacity(0.72), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CyberpunkTheme.surfaceRaised.opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var fidoValidationMessage: String {
+        do {
+            _ = try model.makeFIDOServerCommands()
+            return "请检查服务器信息。"
+        } catch {
+            return error.localizedDescription
+        }
     }
 
     private var gpgTab: some View {
